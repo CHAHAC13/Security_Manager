@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import {
   CheckCircle,
   Home,
@@ -11,7 +12,7 @@ import { cn } from '@/lib/utils';
 interface SidebarLink {
   label: string;
   to: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
 }
 
 const NAV_LINKS: SidebarLink[] = [
