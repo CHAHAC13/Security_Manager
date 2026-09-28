@@ -1,36 +1,43 @@
-"""Serves the Vite-built React SPA with client-side routing support."""
+"""Serves the FastAPI backend API and the Vite-built React SPA."""
 
 import os
-import http.server
-import socketserver
+from pathlib import Path
 
+import uvicorn
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
+
+from backend.routers import access_matrix
+
+DIST_DIR = Path(__file__).parent / "frontend" / "dist"
 PORT = int(os.environ.get("DATABRICKS_APP_PORT", 8000))
-DIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
+
+app = FastAPI(
+    title="Request Manager Application",
+    description="Security Manager",
+    version="0.1.0",
+)
+
+# ── Backend API routes ──
+app.include_router(access_matrix.router)
 
 
-class SPAHandler(http.server.SimpleHTTPRequestHandler):
-    """Falls back to index.html for any path that doesn't match a static file
-    — required for React Router's client-side routing to work."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=DIST_DIR, **kwargs)
-
-    def do_GET(self):
-        file_path = self.translate_path(self.path)
-        if not os.path.isfile(file_path):
-            self.path = "/index.html"
-        return super().do_GET()
-
-    def log_message(self, fmt, *args):
-        """Suppress noisy per-request logs in production."""
-        pass
+@app.get("/api/health")
+async def health():
+    return {"status": "healthy", "service": "Security Management"}
 
 
-def main():
-    with socketserver.TCPServer(("", PORT), SPAHandler) as httpd:
-        print(f"Serving Security Manager on http://0.0.0.0:{PORT}")
-        httpd.serve_forever()
+# ── SPA static files ──
+# Catch-all registered AFTER API routes so /api/* always matches first.
+if DIST_DIR.is_dir():
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        file_path = DIST_DIR / full_path
+        if file_path.is_file():
+            return FileResponse(str(file_path))
+        return FileResponse(str(DIST_DIR / "index.html"))
 
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run(app, host="0.0.0.0", port=PORT)

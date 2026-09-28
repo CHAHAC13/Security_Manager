@@ -63,5 +63,10 @@ export async function getAccessMatrix(
     '/api/access-matrix',
     { params },
   );
+
+  if (!data?.items || !Array.isArray(data.items)) {
+    throw new Error('Unexpected API response — items not found');
+  }
+
   return data.items.map(toAccessMatrixEntry);
 }
