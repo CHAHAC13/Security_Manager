@@ -1,4 +1,4 @@
 command:
   - "bash"
   - "-c"
-  - "cd frontend && npm install && npm run build && cd .. && python app.py"
+  - "pip install fastapi uvicorn && cd frontend && npm install && npm run build && cd .. && uvicorn app:app --host 0.0.0.0 --port ${DATABRICKS_APP_PORT:-8000}"
