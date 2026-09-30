@@ -25,11 +25,8 @@ export function TopBar() {
       <div className="flex items-center space-x-4">
         <div className="text-right">
           <div className="text-xs font-semibold text-slate-900">
-            alex.miller@enterprise.org{' '}
+            alex.miller@xyz{' '}
             <span className="font-normal text-slate-500">[User]</span>
-          </div>
-          <div className="text-[11px] text-slate-500">
-            Guardrails, not gatekeeping
           </div>
         </div>
         <div className="w-8 h-8 rounded-full bg-slate-200 border border-slate-300 flex items-center justify-center text-xs font-semibold text-slate-600">
