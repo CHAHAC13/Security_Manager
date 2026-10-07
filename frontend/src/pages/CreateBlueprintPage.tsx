@@ -3,8 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { BlueprintStepper } from '@/components/blueprint/BlueprintStepper';
 import { BlueprintFooter } from '@/components/blueprint/BlueprintFooter';
 import { BlueprintSetupForm } from '@/components/blueprint/BlueprintSetupForm';
-import { INITIAL_SETUP_DATA } from '@/types/blueprint';
-import type { BlueprintStep, BlueprintSetupData } from '@/types/blueprint';
+import { BlueprintObjectsForm } from '@/components/blueprint/BlueprintObjectsForm';
+import { BlueprintPermissionsForm } from '@/components/blueprint/BlueprintPermissionsForm';
+import { INITIAL_SETUP_DATA, INITIAL_OBJECTS_DATA, INITIAL_PERMISSIONS_DATA } from '@/types/blueprint';
+import type { BlueprintStep, BlueprintSetupData, BlueprintObjectsData, BlueprintPermissionsData } from '@/types/blueprint';
 
 /** Step subtitle descriptions shown in the page header. */
 const STEP_DESCRIPTIONS: Record<BlueprintStep, string> = {
@@ -35,16 +37,22 @@ export function CreateBlueprintPage() {
   // Step 1 form state
   const [setupData, setSetupData] = useState<BlueprintSetupData>(INITIAL_SETUP_DATA);
 
-  // TODO: add state for steps 2–5 as they are implemented
+  // Step 2 form state
+  const [objectsData, setObjectsData] = useState<BlueprintObjectsData>(INITIAL_OBJECTS_DATA);
+
+  // Step 3 form state
+  const [permissionsData, setPermissionsData] = useState<BlueprintPermissionsData>(INITIAL_PERMISSIONS_DATA);
+
+  // TODO: add state for steps 4–5 as they are implemented
 
   const handleNext = useCallback(() => {
     if (currentStep < 5) {
       setCurrentStep((prev) => (prev + 1) as BlueprintStep);
     } else {
       // Final submit — will call backend once available
-      console.log('Blueprint submitted:', { setupData });
+      console.log('Blueprint submitted:', { setupData, objectsData, permissionsData });
     }
-  }, [currentStep, setupData]);
+  }, [currentStep, setupData, objectsData, permissionsData]);
 
   const handleBack = useCallback(() => {
     if (currentStep > 1) {
@@ -58,8 +66,8 @@ export function CreateBlueprintPage() {
 
   const handleSaveDraft = useCallback(() => {
     // TODO: persist draft to backend
-    console.log('Draft saved:', { setupData });
-  }, [setupData]);
+    console.log('Draft saved:', { setupData, objectsData, permissionsData });
+  }, [setupData, objectsData, permissionsData]);
 
   return (
     <div className="space-y-6">
@@ -83,11 +91,15 @@ export function CreateBlueprintPage() {
         )}
 
         {currentStep === 2 && (
-          <Placeholder label="Object Wizard" />
+          <BlueprintObjectsForm data={objectsData} onChange={setObjectsData} />
         )}
 
         {currentStep === 3 && (
-          <Placeholder label="Permissions" />
+          <BlueprintPermissionsForm
+            data={permissionsData}
+            objectsData={objectsData}
+            onChange={setPermissionsData}
+          />
         )}
 
         {currentStep === 4 && (
