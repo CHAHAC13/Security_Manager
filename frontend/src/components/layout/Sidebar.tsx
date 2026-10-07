@@ -47,7 +47,10 @@ export function Sidebar() {
       {/* Navigation links */}
       <nav className="p-4 space-y-1">
         {NAV_LINKS.map((link) => {
-          const isActive = location.pathname === link.to;
+          const isActive =
+            link.to === '/'
+              ? location.pathname === '/'
+              : location.pathname.startsWith(link.to);
 
           return (
             <Link

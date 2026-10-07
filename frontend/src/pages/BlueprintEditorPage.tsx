@@ -1,7 +1,11 @@
+import { useNavigate } from 'react-router-dom';
+import { Plus } from 'lucide-react';
 import { useAccessMatrix } from '@/hooks/useAccessMatrix';
 import { useAccessMatrixFilters } from '@/hooks/useAccessMatrixFilters';
+import { Button } from '@/components/ui/Button';
 
 export function BlueprintEditorPage() {
+  const navigate = useNavigate();
   const { data, loading, error, refetch } = useAccessMatrix();
   const {
     filters,
@@ -51,12 +55,21 @@ export function BlueprintEditorPage() {
             {totalItems} {totalItems === 1 ? 'entry' : 'entries'} found
           </p>
         </div>
-        <button
-          onClick={() => refetch()}
-          className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white hover:bg-slate-700"
-        >
-          Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => refetch()}
+            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white hover:bg-slate-700"
+          >
+            Refresh
+          </button>
+          <Button
+            variant="primary"
+            icon={<Plus className="w-3.5 h-3.5" />}
+            onClick={() => navigate('/blueprint-editor/create')}
+          >
+            Create Blueprint
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}
