@@ -53,7 +53,7 @@ export function CreateBlueprintPage() {
   }, [currentStep]);
 
   const handleCancel = useCallback(() => {
-    navigate('/blueprint-editor');
+    navigate('/');
   }, [navigate]);
 
   const handleSaveDraft = useCallback(() => {
