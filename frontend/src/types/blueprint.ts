@@ -55,8 +55,8 @@ export interface SchemaOption {
   id: string;
   name: string;
   catalogId: string;
-  tag: string;
-  objectCount: number;
+  tag?: string;
+  objectCount?: number;
 }
 
 export interface ObjectOption {
@@ -64,7 +64,25 @@ export interface ObjectOption {
   name: string;
   schemaId: string;
   kind: ObjectKind;
-  status: ValidationStatus;
+  status?: ValidationStatus;
+  source?: 'existing' | 'new';
+}
+
+export interface ProposedCatalog {
+  id: string;
+  name: string;
+  source: 'new';
+}
+
+export interface ProposedSchema {
+  id: string;
+  name: string;
+  catalogId: string;
+  source: 'new';
+}
+
+export interface ProposedObject extends ObjectOption {
+  source: 'new';
 }
 
 /** Form data for Step 2: Object Scope. */
@@ -72,6 +90,10 @@ export interface BlueprintObjectsData {
   selectedCatalogId: string;
   selectedSchemaIds: string[];
   selectedObjectIds: string[];
+  selectedObjects: ObjectOption[];
+  proposedCatalogs: ProposedCatalog[];
+  proposedSchemas: ProposedSchema[];
+  proposedObjects: ProposedObject[];
   /** Which schema is currently expanded to show its objects. */
   focusedSchemaId: string | null;
 }
@@ -80,6 +102,10 @@ export const INITIAL_OBJECTS_DATA: BlueprintObjectsData = {
   selectedCatalogId: '',
   selectedSchemaIds: [],
   selectedObjectIds: [],
+  selectedObjects: [],
+  proposedCatalogs: [],
+  proposedSchemas: [],
+  proposedObjects: [],
   focusedSchemaId: null,
 };
 

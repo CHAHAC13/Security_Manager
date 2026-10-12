@@ -9,7 +9,6 @@ import {
   Trash2,
   Eye,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
 import { Badge, type BadgeVariant } from '@/components/ui/Badge';
 import {
   MOCK_ROLES,
@@ -17,7 +16,6 @@ import {
   ENVIRONMENT_OPTIONS,
   RM_FORM_OPTIONS,
 } from '@/data/permissionsData';
-import { MOCK_OBJECTS } from '@/data/objectWizardData';
 import type {
   BlueprintPermissionsData,
   BlueprintObjectsData,
@@ -66,8 +64,8 @@ export function BlueprintPermissionsForm({
   objectsData,
   onChange,
 }: BlueprintPermissionsFormProps) {
-  const selectedObjects = MOCK_OBJECTS.filter((o) =>
-    objectsData.selectedObjectIds.includes(o.id),
+  const selectedObjects = objectsData.selectedObjects.filter((object) =>
+    objectsData.selectedObjectIds.includes(object.id),
   );
 
   /* ── Event handlers ── */
@@ -153,7 +151,7 @@ export function BlueprintPermissionsForm({
                     {obj.name}
                   </span>
                   <span className="text-[11px] text-slate-400 font-medium">
-                    [{obj.kind === 'table'
+                    [{obj.source === 'new' ? 'Proposed' : obj.kind === 'table'
                       ? 'Delta Lake Table'
                       : obj.kind === 'materialized_view'
                         ? 'Materialized View'
