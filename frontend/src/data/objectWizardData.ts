@@ -14,6 +14,10 @@ export const MOCK_SCHEMAS: SchemaOption[] = [
   { id: 'sch-1', name: 'GPDIP_CDM', catalogId: 'cat-1', tag: 'Common Data Model', objectCount: 14 },
   { id: 'sch-2', name: 'GPDIP_OUTBOUND', catalogId: 'cat-1', tag: 'Outbound Feeds', objectCount: 6 },
   { id: 'sch-3', name: 'GPDIP_CDQ', catalogId: 'cat-1', tag: 'Quality Rules', objectCount: 9 },
+  { id: 'sch-21', name: 'GPDIP_REFERENCE', catalogId: 'cat-1', tag: 'Reference Data', objectCount: 8 },
+  { id: 'sch-22', name: 'GPDIP_AUDIT', catalogId: 'cat-1', tag: 'Audit Records', objectCount: 5 },
+  { id: 'sch-23', name: 'GPDIP_COHORTS', catalogId: 'cat-1', tag: 'Research Cohorts', objectCount: 7 },
+  { id: 'sch-24', name: 'GPDIP_RESEARCH', catalogId: 'cat-1', tag: 'Research Data', objectCount: 4 },
   // gpdip_prod_shared_01
   { id: 'sch-4', name: 'SHARED_ANALYTICS', catalogId: 'cat-2', tag: 'Analytics', objectCount: 22 },
   { id: 'sch-5', name: 'SHARED_REPORTING', catalogId: 'cat-2', tag: 'Reporting', objectCount: 11 },
@@ -31,6 +35,10 @@ export const MOCK_OBJECTS: ObjectOption[] = [
   { id: 'obj-2', name: 'cdm_encounter', schemaId: 'sch-1', kind: 'table', status: 'validated' },
   { id: 'obj-3', name: 'cdm_observation', schemaId: 'sch-1', kind: 'view', status: 'pending' },
   { id: 'obj-4', name: 'cdm_drug_exposure', schemaId: 'sch-1', kind: 'table', status: 'validated' },
+  { id: 'obj-21', name: 'cdm_condition', schemaId: 'sch-1', kind: 'table', status: 'validated' },
+  { id: 'obj-22', name: 'cdm_procedure', schemaId: 'sch-1', kind: 'table', status: 'pending' },
+  { id: 'obj-23', name: 'cdm_measurement', schemaId: 'sch-1', kind: 'table', status: 'validated' },
+  { id: 'obj-24', name: 'cdm_visit_detail', schemaId: 'sch-1', kind: 'view', status: 'pending' },
   // GPDIP_OUTBOUND (sch-2)
   { id: 'obj-5', name: 'adx_contact', schemaId: 'sch-2', kind: 'table', status: 'validated' },
   { id: 'obj-6', name: 'adx_study_site', schemaId: 'sch-2', kind: 'materialized_view', status: 'validated' },

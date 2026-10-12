@@ -1,0 +1,13 @@
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local Markdown notes; keep README files eligible for version control
+*.md
+!README.md
+!**/README.md
+!OBJECT_PAGE_PROCESS.md
+
+# No root package.json exists; keep the frontend lockfile tracked
+/package-lock.json
