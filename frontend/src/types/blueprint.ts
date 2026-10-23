@@ -49,6 +49,7 @@ export type ValidationStatus = 'validated' | 'pending' | 'error';
 export interface CatalogOption {
   id: string;
   name: string;
+  catalogType?: string;
 }
 
 export interface SchemaOption {

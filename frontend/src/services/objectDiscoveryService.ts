@@ -1,3 +1,4 @@
+import axios from 'axios';
 import apiClient from '@/lib/apiClient';
 import {
   MOCK_CATALOGS,
@@ -31,49 +32,154 @@ export interface ObjectDiscoveryService {
     request: DiscoveryPageRequest,
   ): Promise<DiscoveryPage<SchemaOption>>;
   getObjects(
-    schemaId: string,
+    catalogName: string,
+    schemaName: string,
     request: DiscoveryPageRequest,
   ): Promise<DiscoveryPage<ObjectOption>>;
 }
 
+interface ApiPagination {
+  page: number;
+  has_next: boolean;
+}
+
 interface ApiPage<T> {
   items: T[];
-  nextCursor: string | null;
+  pagination: ApiPagination;
 }
 
-function assertPage<T>(data: ApiPage<T> | undefined): DiscoveryPage<T> {
-  if (!data || !Array.isArray(data.items)) {
-    throw new Error('Unexpected discovery response: items not found');
+interface ApiCatalog {
+  name: string;
+  catalog_type: string;
+}
+
+interface ApiSchema {
+  name: string;
+  catalog_name: string;
+}
+
+interface ApiObject {
+  name: string;
+  catalog_name: string;
+  schema_name: string;
+  full_name: string;
+  object_type: string;
+  display_type: 'TABLE' | 'VIEW';
+}
+
+interface ApiErrorBody {
+  detail?: string | { message?: string };
+}
+
+function pageNumber(request: DiscoveryPageRequest): number {
+  if (!request.cursor) return 1;
+  const page = Number(request.cursor);
+  if (!Number.isInteger(page) || page < 1) {
+    throw new Error('Invalid discovery page cursor');
   }
-  return { items: data.items, nextCursor: data.nextCursor ?? null };
+  return page;
 }
 
-function requestParams(request: DiscoveryPageRequest) {
-  const { limit, cursor, search, kind } = request;
-  return { limit, cursor, search, kind };
+function apiPage<TApi, TOption>(
+  data: ApiPage<TApi> | undefined,
+  mapItem: (item: TApi) => TOption,
+): DiscoveryPage<TOption> {
+  if (!data || !Array.isArray(data.items) || !data.pagination) {
+    throw new Error('Unexpected discovery response: items or pagination not found');
+  }
+  return {
+    items: data.items.map(mapItem),
+    nextCursor: data.pagination.has_next
+      ? String(data.pagination.page + 1)
+      : null,
+  };
+}
+
+function apiError(error: unknown): Error {
+  if (axios.isAxiosError<ApiErrorBody>(error)) {
+    const detail = error.response?.data?.detail;
+    if (typeof detail === 'string') return new Error(detail);
+    if (detail?.message) return new Error(detail.message);
+    if (error.response?.status) {
+      return new Error(`Discovery request failed (${error.response.status})`);
+    }
+  }
+  return error instanceof Error ? error : new Error('Discovery request failed');
+}
+
+async function withApiErrors<T>(request: () => Promise<T>): Promise<T> {
+  try {
+    return await request();
+  } catch (error) {
+    throw apiError(error);
+  }
+}
+
+function apiPageParams(request: DiscoveryPageRequest) {
+  return {
+    page: pageNumber(request),
+    page_size: request.limit,
+    search: request.search,
+  };
 }
 
 export const apiObjectDiscoveryService: ObjectDiscoveryService = {
   async getCatalogs(request) {
-    const { data } = await apiClient.get<ApiPage<CatalogOption>>('/api/catalogs', {
-      params: requestParams(request),
-      signal: request.signal,
+    return withApiErrors(async () => {
+      const { data } = await apiClient.get<ApiPage<ApiCatalog>>(
+        '/api/v1/discovery/catalogs',
+        { params: apiPageParams(request), signal: request.signal },
+      );
+      return apiPage(data, (item) => ({
+        id: item.name,
+        name: item.name,
+        catalogType: item.catalog_type,
+      }));
     });
-    return assertPage(data);
   },
   async getSchemas(catalogId, request) {
-    const { data } = await apiClient.get<ApiPage<SchemaOption>>(
-      `/api/catalogs/${encodeURIComponent(catalogId)}/schemas`,
-      { params: requestParams(request), signal: request.signal },
-    );
-    return assertPage(data);
+    return withApiErrors(async () => {
+      const { data } = await apiClient.get<ApiPage<ApiSchema>>(
+        `/api/v1/discovery/catalogs/${encodeURIComponent(catalogId)}/schemas`,
+        { params: apiPageParams(request), signal: request.signal },
+      );
+      return apiPage(data, (item) => ({
+        id: item.name,
+        name: item.name,
+        catalogId: item.catalog_name,
+      }));
+    });
   },
-  async getObjects(schemaId, request) {
-    const { data } = await apiClient.get<ApiPage<ObjectOption>>(
-      `/api/schemas/${encodeURIComponent(schemaId)}/objects`,
-      { params: requestParams(request), signal: request.signal },
-    );
-    return assertPage(data);
+  async getObjects(catalogName, schemaName, request) {
+    return withApiErrors(async () => {
+      const objectType = request.kind === 'table'
+        ? 'TABLE'
+        : request.kind
+          ? 'VIEW'
+          : 'ALL';
+      const { data } = await apiClient.get<ApiPage<ApiObject>>(
+        `/api/v1/discovery/catalogs/${encodeURIComponent(catalogName)}/objects`,
+        {
+          params: {
+            ...apiPageParams(request),
+            schema_names: schemaName,
+            object_type: objectType,
+          },
+          signal: request.signal,
+        },
+      );
+      return apiPage(data, (item) => ({
+        id: item.full_name,
+        name: item.name,
+        schemaId: item.schema_name,
+        kind: item.object_type === 'MATERIALIZED_VIEW'
+          ? 'materialized_view'
+          : item.display_type === 'VIEW'
+            ? 'view'
+            : 'table',
+        source: 'existing',
+      }));
+    });
   },
 };
 
@@ -137,14 +243,16 @@ export const mockObjectDiscoveryService: ObjectDiscoveryService = {
       request,
     );
   },
-  async getObjects(schemaId, request) {
+  async getObjects(catalogId, schemaId, request) {
     await mockRequest(request.signal);
+    const schema = MOCK_SCHEMAS.find(
+      (item) => item.catalogId === catalogId && (item.id === schemaId || item.name === schemaId),
+    );
     const objects = MOCK_OBJECTS.filter(
-      (object) => object.schemaId === schemaId && (!request.kind || object.kind === request.kind),
+      (object) => object.schemaId === schema?.id && (!request.kind || object.kind === request.kind),
     );
     return pageItems(objects, request);
   },
 };
 
-// Switch to apiObjectDiscoveryService when the backend discovery routes are available.
-export const objectDiscoveryService = mockObjectDiscoveryService;
+export const objectDiscoveryService = apiObjectDiscoveryService;

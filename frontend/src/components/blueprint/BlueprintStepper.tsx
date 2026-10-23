@@ -61,7 +61,7 @@ export function BlueprintStepper({ currentStep, onStepClick }: BlueprintStepperP
               {idx < BLUEPRINT_STEPS.length - 1 && (
                 <div
                   className={cn(
-                    'h-px flex-1 min-w-[20px]',
+                    'h-px flyex-1 min-w-[20px]',
                     s.step < currentStep ? 'bg-emerald-300' : 'bg-slate-200',
                   )}
                 />

@@ -6,6 +6,7 @@ import {
 import type { CatalogOption, ObjectOption, SchemaOption } from '@/types/blueprint';
 
 const PAGE_SIZE = 5;
+const CATALOG_KEY_PREFIX = 'catalogs:';
 
 interface PageState<T> {
   key: string | null;
@@ -47,6 +48,10 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const catalogCache = new Map<string, CachedPage<CatalogOption>>();
 const schemaCache = new Map<string, CachedPage<SchemaOption>>();
 const objectCache = new Map<string, CachedPage<ObjectOption>>();
+
+export function objectDiscoveryKey(catalogName: string, schemaName: string): string {
+  return JSON.stringify([catalogName, schemaName]);
+}
 
 function mergeById<T extends { id: string }>(current: T[], incoming: T[]): T[] {
   const items = new Map(current.map((item) => [item.id, item]));
@@ -188,19 +193,49 @@ function usePagedResource<T extends { id: string }>(
   };
 }
 
-const loadCatalogPage: PageLoader<CatalogOption> = (_key, cursor, signal) =>
-  objectDiscoveryService.getCatalogs({ limit: PAGE_SIZE, cursor, signal });
+const loadCatalogPage: PageLoader<CatalogOption> = (key, cursor, signal) =>
+  objectDiscoveryService.getCatalogs({
+    limit: PAGE_SIZE,
+    cursor,
+    signal,
+    search: key.slice(CATALOG_KEY_PREFIX.length) || undefined,
+  });
 
 const loadSchemaPage: PageLoader<SchemaOption> = (catalogId, cursor, signal) =>
   objectDiscoveryService.getSchemas(catalogId, { limit: PAGE_SIZE, cursor, signal });
 
-const loadObjectPage: PageLoader<ObjectOption> = (schemaId, cursor, signal) =>
-  objectDiscoveryService.getObjects(schemaId, { limit: PAGE_SIZE, cursor, signal });
+const loadObjectPage: PageLoader<ObjectOption> = (key, cursor, signal) => {
+  const [catalogName, schemaName] = JSON.parse(key) as [string, string];
+  return objectDiscoveryService.getObjects(catalogName, schemaName, {
+    limit: PAGE_SIZE,
+    cursor,
+    signal,
+  });
+};
 
-export function useObjectDiscovery(catalogId: string | null, schemaId: string | null) {
-  const catalogs = usePagedResource('catalogs', loadCatalogPage, catalogCache);
+export function useObjectDiscovery(
+  catalogId: string | null,
+  schemaId: string | null,
+  catalogSearch = '',
+) {
+  const normalizedSearch = catalogSearch.trim();
+  const [debouncedSearch, setDebouncedSearch] = useState(normalizedSearch);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebouncedSearch(normalizedSearch), 300);
+    return () => window.clearTimeout(timeout);
+  }, [normalizedSearch]);
+
+  const catalogs = usePagedResource(`${CATALOG_KEY_PREFIX}${debouncedSearch}`, loadCatalogPage, catalogCache);
   const schemas = usePagedResource(catalogId, loadSchemaPage, schemaCache);
-  const objects = usePagedResource(schemaId, loadObjectPage, objectCache);
+  const objectKey = catalogId && schemaId
+    ? objectDiscoveryKey(catalogId, schemaId)
+    : null;
+  const objects = usePagedResource(objectKey, loadObjectPage, objectCache);
 
-  return { catalogs, schemas, objects };
+  return {
+    catalogs: { ...catalogs, searching: normalizedSearch !== debouncedSearch },
+    schemas,
+    objects,
+  };
 }

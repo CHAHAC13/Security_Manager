@@ -2,7 +2,6 @@ import { useState, type FormEvent } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
-  ChevronDown,
   Database,
   FolderTree,
   Info,
@@ -14,7 +13,8 @@ import {
   Eye,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useObjectDiscovery } from '@/hooks/useObjectDiscovery';
+import { CatalogPicker } from './CatalogPicker';
+import { objectDiscoveryKey, useObjectDiscovery } from '@/hooks/useObjectDiscovery';
 import type { BlueprintObjectsData, ObjectKind, ObjectOption } from '@/types/blueprint';
 
 interface BlueprintObjectsFormProps {
@@ -89,10 +89,11 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
   const [proposalName, setProposalName] = useState('');
   const [proposalKind, setProposalKind] = useState<ObjectKind>('table');
   const [proposalError, setProposalError] = useState<string | null>(null);
+  const [catalogSearch, setCatalogSearch] = useState('');
   const focusedSchemaId = data.selectedSchemaIds.includes(data.focusedSchemaId ?? '')
     ? data.focusedSchemaId
     : null;
-  const discovery = useObjectDiscovery(data.selectedCatalogId || null, focusedSchemaId);
+  const discovery = useObjectDiscovery(data.selectedCatalogId || null, focusedSchemaId, catalogSearch);
   const schemas = discovery.schemas.items;
   const visibleSchemas = discovery.schemas.pageItems;
   const focusedSchema = schemas.find((schema) => schema.id === data.focusedSchemaId) ?? null;
@@ -141,7 +142,7 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
       ? [...discovery.catalogs.items, ...data.proposedCatalogs].some((item) => item.name.toLocaleLowerCase() === normalizedName)
       : activeCreation === 'schema'
         ? [...schemas, ...data.proposedSchemas.filter((schema) => schema.catalogId === data.selectedCatalogId)].some((item) => item.name.toLocaleLowerCase() === normalizedName)
-        : [...discovery.objects.getCachedItems(focusedSchema?.id ?? ''), ...data.proposedObjects.filter((object) => object.schemaId === focusedSchema?.id)].some((item) => item.name.toLocaleLowerCase() === normalizedName);
+        : [...discovery.objects.getCachedItems(objectDiscoveryKey(data.selectedCatalogId, focusedSchema?.id ?? '')), ...data.proposedObjects.filter((object) => object.schemaId === focusedSchema?.id)].some((item) => item.name.toLocaleLowerCase() === normalizedName);
 
     if (duplicate) {
       setProposalError('An item with this name already exists in this location.');
@@ -258,7 +259,7 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
   /* How many objects are scoped for a given schema */
   function scopedObjectCount(schemaId: string): number {
     const schemaObjIds = new Set(
-      discovery.objects.getCachedItems(schemaId).map((object) => object.id),
+      discovery.objects.getCachedItems(objectDiscoveryKey(data.selectedCatalogId, schemaId)).map((object) => object.id),
     );
     return data.selectedObjectIds.filter((id) => schemaObjIds.has(id)).length;
   }
@@ -293,30 +294,19 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
           </div>
 
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            <div className="relative flex-1">
-              <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-[11px] font-medium text-slate-400 uppercase tracking-wider pointer-events-none">
-                Target:
-              </span>
-              <select
-                id="catalog-select"
-                value={data.selectedCatalogId}
-                onChange={(e) => handleCatalogChange(e.target.value)}
-                className="w-full pl-16 pr-9 h-9 bg-white border border-slate-300 rounded-md text-sm font-mono text-slate-900 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 appearance-none cursor-pointer"
-              >
-                <option value="">Select a catalog…</option>
-                {data.selectedCatalogId && !discovery.catalogs.items.some((catalog) => catalog.id === data.selectedCatalogId) && (
-                  <option value={data.selectedCatalogId}>{data.selectedCatalogId}</option>
-                )}
-                {discovery.catalogs.items.map((catalog) => (
-                  <option key={catalog.id} value={catalog.id}>
-                    {catalog.name}
-                  </option>
-                ))}
-              </select>
-              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400">
-                <ChevronDown className="w-4 h-4" />
-              </div>
-            </div>
+            <CatalogPicker
+              value={data.selectedCatalogId}
+              items={discovery.catalogs.items}
+              search={catalogSearch}
+              loading={discovery.catalogs.loading || discovery.catalogs.searching}
+              loadingMore={discovery.catalogs.loadingMore}
+              error={discovery.catalogs.error}
+              hasMore={Boolean(discovery.catalogs.nextCursor)}
+              onSearchChange={setCatalogSearch}
+              onChange={handleCatalogChange}
+              onLoadMore={discovery.catalogs.loadMore}
+              onRetry={discovery.catalogs.retry}
+            />
 
             <button
               type="button"
@@ -334,23 +324,6 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
             </ul>
           )}
 
-          {discovery.catalogs.loading && (
-            <p role="status" aria-live="polite" className="text-xs text-slate-500">Loading catalogs…</p>
-          )}
-          {discovery.catalogs.error && (
-            <div role="alert" className="flex items-center justify-between gap-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">
-              <span>{discovery.catalogs.error}</span>
-              <button type="button" onClick={discovery.catalogs.retry} className="font-semibold underline">Retry</button>
-            </div>
-          )}
-          {!discovery.catalogs.loading && !discovery.catalogs.error && discovery.catalogs.items.length === 0 && (
-            <p className="text-xs text-slate-500">No catalogs found.</p>
-          )}
-          {discovery.catalogs.nextCursor && (
-            <button type="button" onClick={discovery.catalogs.loadMore} disabled={discovery.catalogs.loadingMore} className="self-start text-xs font-medium text-sky-700 hover:text-sky-800 disabled:text-slate-400">
-              {discovery.catalogs.loadingMore ? 'Loading catalogs…' : 'Load more catalogs'}
-            </button>
-          )}
         </div>
 
         {/* 2 ─ Discovered Schemas */}

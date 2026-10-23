@@ -4,7 +4,6 @@ import {
   getAccessMatrix,
   type AccessMatrixParams,
 } from '@/services/accessMatrixService';
-
 interface UseAccessMatrixReturn {
   data: AccessMatrixEntry[];
   loading: boolean;
