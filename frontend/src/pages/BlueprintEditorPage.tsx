@@ -75,21 +75,6 @@ export function BlueprintEditorPage() {
       {/* Filters */}
       <div className="flex flex-wrap gap-3">
         <select
-          value={filters.environment ?? ''}
-          onChange={(e) =>
-            updateFilter('environment', e.target.value || null)
-          }
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
-        >
-          <option value="">All Environments</option>
-          {filterOptions.environments.map((env) => (
-            <option key={env} value={env}>
-              {env}
-            </option>
-          ))}
-        </select>
-
-        <select
           value={filters.blueprint ?? ''}
           onChange={(e) =>
             updateFilter('blueprint', e.target.value || null)

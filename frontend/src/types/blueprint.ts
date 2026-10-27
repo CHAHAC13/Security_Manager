@@ -16,6 +16,7 @@ export const BLUEPRINT_STEPS: BlueprintStepMeta[] = [
 
 /** Form data for Step 1: Blueprint Setup. */
 export interface BlueprintSetupData {
+  environment: PermissionEnvironment;
   name: string;
   version: string;
   description: string;
@@ -34,6 +35,7 @@ export interface BlueprintFormData {
 }
 
 export const INITIAL_SETUP_DATA: BlueprintSetupData = {
+  environment: 'dev',
   name: '',
   version: 'v1.0',
   description: '',
@@ -89,6 +91,8 @@ export interface ProposedObject extends ObjectOption {
 /** Form data for Step 2: Object Scope. */
 export interface BlueprintObjectsData {
   selectedCatalogId: string;
+  selectedCatalog?: CatalogOption;
+  selectedSchemas?: SchemaOption[];
   selectedSchemaIds: string[];
   selectedObjectIds: string[];
   selectedObjects: ObjectOption[];
@@ -112,41 +116,82 @@ export const INITIAL_OBJECTS_DATA: BlueprintObjectsData = {
 
 /* ── Step 3: Permissions types ── */
 
-export type Privilege =
-  | 'SELECT'
-  | 'INSERT'
-  | 'UPDATE'
-  | 'DELETE'
-  | 'ALL PRIVILEGES'
-  | 'MODIFY'
-  | 'USE CATALOG'
-  | 'USE SCHEMA';
+export type PermissionEnvironment = 'dev' | 'stg' | 'prd';
+export type PermissionObjectType = 'CATALOG' | 'SCHEMA' | 'TABLE' | 'VIEW' | 'FUNCTION';
+export type RoleLevel = 'CATALOG' | 'SCHEMA' | 'OBJECT';
+export type ResourceStatus = 'NEW' | 'EXISTING';
 
-export type PermissionEnvironment = 'Dev' | 'Stg' | 'Prd';
-
-export type RmForm = 'Reg User' | 'Restricted' | 'Admin' | 'Service';
-
-export interface RoleOption {
-  id: string;
-  name: string;
-  description: string;
-}
-
-/** A single permission assignment row. */
-export interface PermissionAssignment {
-  id: string;
-  roleId: string;
+export interface PermissionObject {
   objectId: string;
-  privilege: Privilege;
-  environment: PermissionEnvironment;
-  rmForm: RmForm;
+  objectName: string;
+  objectType: PermissionObjectType;
+  status: ResourceStatus;
+  parentId: string | null;
 }
 
-/** Form data for Step 3: Permissions. */
+export interface ObjectPermission {
+  objectId: string;
+  objectName: string;
+  objectType: PermissionObjectType;
+  readonly originalPermissions: readonly string[];
+  permissions: string[];
+}
+
+export interface RequestManagerValues {
+  enabled: boolean;
+  formType: string;
+  displayName: string;
+}
+
+export interface RequestManagerConfiguration extends RequestManagerValues {
+  readonly originalValues: Readonly<RequestManagerValues>;
+}
+
+export interface RoleAssignment {
+  id: string;
+  mode: 'CREATE_NEW' | 'UPDATE_EXISTING';
+  status: ResourceStatus;
+  level: RoleLevel;
+  scopeObjectId: string;
+  roleTypeCode: string;
+  roleName: string;
+  roleNameManuallyEdited: boolean;
+  objectPermissions: ObjectPermission[];
+  requestManager: RequestManagerConfiguration;
+}
+
+export interface PermissionChange {
+  objectId: string;
+  privilege: string;
+  changeType: 'GRANT' | 'REVOKE';
+}
+
+export interface PermissionOption {
+  code: string;
+  label: string;
+}
+
+export interface PermissionMetadata {
+  permissionOptions: Record<PermissionObjectType, string[]>;
+  roleTypes: PermissionOption[];
+  formTypes: PermissionOption[];
+}
+
+export type RoleField = 'level' | 'scopeObjectId' | 'roleTypeCode' | 'roleName' | 'objectPermissions' | 'formType' | 'displayName';
+export type RoleErrors = Partial<Record<RoleField, string>>;
+export interface PermissionsErrors {
+  configuration?: string;
+  roles: Record<string, RoleErrors>;
+}
+
 export interface BlueprintPermissionsData {
-  assignments: PermissionAssignment[];
+  roleAssignments: RoleAssignment[];
+  /** Discovery bookkeeping prevents removed roles from returning on every visit. */
+  discoveredRoleIds: string[];
+  discoveryEnvironment?: PermissionEnvironment;
 }
 
 export const INITIAL_PERMISSIONS_DATA: BlueprintPermissionsData = {
-  assignments: [],
+  roleAssignments: [],
+  discoveredRoleIds: [],
 };

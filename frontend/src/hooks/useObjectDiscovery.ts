@@ -14,6 +14,8 @@ interface PageState<T> {
   pages: T[][];
   pageIndex: number;
   nextCursor: string | null;
+  totalItems: number | null;
+  totalPages: number | null;
   loading: boolean;
   loadingMore: boolean;
   error: string | null;
@@ -24,6 +26,8 @@ interface CachedPage<T> {
   pages: T[][];
   pageIndex: number;
   nextCursor: string | null;
+  totalItems: number;
+  totalPages: number;
   expiresAt: number;
 }
 
@@ -39,6 +43,8 @@ const EMPTY_STATE: PageState<never> = {
   pages: [],
   pageIndex: 0,
   nextCursor: null,
+  totalItems: null,
+  totalPages: null,
   loading: false,
   loadingMore: false,
   error: null,
@@ -86,6 +92,8 @@ function usePagedResource<T extends { id: string }>(
         pages: cached.pages,
         pageIndex: cached.pageIndex,
         nextCursor: cached.nextCursor,
+        totalItems: cached.totalItems,
+        totalPages: cached.totalPages,
         loading: false,
         loadingMore: false,
         error: null,
@@ -96,15 +104,16 @@ function usePagedResource<T extends { id: string }>(
 
     const controller = new AbortController();
     requestController.current = controller;
-    setState({ key, items: [], pages: [], pageIndex: 0, nextCursor: null, loading: true, loadingMore: false, error: null });
+    setState({ ...EMPTY_STATE, key, loading: true });
 
     loadPage(key, null, controller.signal)
       .then((page) => {
         if (controller.signal.aborted || currentKey.current !== key) return;
         const items = mergeById([], page.items);
         const pages = [page.items];
-        cache.set(key, { items, pages, pageIndex: 0, nextCursor: page.nextCursor, expiresAt: Date.now() + CACHE_TTL_MS });
-        setState({ key, items, pages, pageIndex: 0, nextCursor: page.nextCursor, loading: false, loadingMore: false, error: null });
+        const totals = { totalItems: page.totalItems, totalPages: page.totalPages };
+        cache.set(key, { items, pages, pageIndex: 0, nextCursor: page.nextCursor, ...totals, expiresAt: Date.now() + CACHE_TTL_MS });
+        setState({ key, items, pages, pageIndex: 0, nextCursor: page.nextCursor, ...totals, loading: false, loadingMore: false, error: null });
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted || currentKey.current !== key) return;
@@ -144,8 +153,9 @@ function usePagedResource<T extends { id: string }>(
       const items = mergeById(cached.items, page.items);
       const pages = [...cached.pages, page.items];
       const pageIndex = pages.length - 1;
-      cache.set(key, { items, pages, pageIndex, nextCursor: page.nextCursor, expiresAt: Date.now() + CACHE_TTL_MS });
-      setState({ key, items, pages, pageIndex, nextCursor: page.nextCursor, loading: false, loadingMore: false, error: null });
+      const totals = { totalItems: page.totalItems, totalPages: page.totalPages };
+      cache.set(key, { items, pages, pageIndex, nextCursor: page.nextCursor, ...totals, expiresAt: Date.now() + CACHE_TTL_MS });
+      setState({ key, items, pages, pageIndex, nextCursor: page.nextCursor, ...totals, loading: false, loadingMore: false, error: null });
     } catch (error) {
       if (controller.signal.aborted || currentKey.current !== key) return;
       setState((current) => ({
