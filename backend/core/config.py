@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     @classmethod
     def validate_databricks_host(cls, value: str) -> str:
         value = value.strip().rstrip("/")
+        # Databricks Apps injects DATABRICKS_HOST as a bare hostname
+        # (e.g. "my-workspace.cloud.databricks.com"); default to HTTPS.
+        if value and "://" not in value:
+            value = f"https://{value}"
         parsed = urlparse(value)
         if parsed.scheme not in {"https", "http"} or not parsed.netloc:
             raise ValueError("DATABRICKS_HOST must be a valid HTTP(S) URL.")
