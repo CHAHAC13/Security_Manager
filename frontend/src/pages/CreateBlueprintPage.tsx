@@ -1,10 +1,12 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BlueprintStepper } from '@/components/blueprint/BlueprintStepper';
 import { BlueprintFooter } from '@/components/blueprint/BlueprintFooter';
 import { BlueprintSetupForm } from '@/components/blueprint/BlueprintSetupForm';
 import { BlueprintObjectsForm } from '@/components/blueprint/BlueprintObjectsForm';
-import { BlueprintPermissionsForm } from '@/components/blueprint/BlueprintPermissionsForm';
+import { BlueprintPermissionsForm, type PermissionsFormHandle } from '@/components/blueprint/BlueprintPermissionsForm';
+import { permissionsService, PermissionsValidationError, type PermissionsService } from '@/services/permissionsService';
+import { reconcilePermissions } from '@/lib/permissions';
 import { INITIAL_SETUP_DATA, INITIAL_OBJECTS_DATA, INITIAL_PERMISSIONS_DATA } from '@/types/blueprint';
 import type { BlueprintStep, BlueprintSetupData, BlueprintObjectsData, BlueprintPermissionsData } from '@/types/blueprint';
 
@@ -12,7 +14,7 @@ import type { BlueprintStep, BlueprintSetupData, BlueprintObjectsData, Blueprint
 const STEP_DESCRIPTIONS: Record<BlueprintStep, string> = {
   1: 'Define the top-level metadata and business justification.',
   2: 'Select the Databricks objects to include in this blueprint.',
-  3: 'Configure role-based permissions for each object.',
+  3: 'Configure roles and permissions for the objects selected in the previous step.',
   4: 'Assign technical and business approvers.',
   5: 'Review the complete blueprint before submission.',
 };
@@ -30,7 +32,7 @@ const STEP_LABELS: Record<BlueprintStep, string> = {
  * Orchestrates the 5-step flow: Setup → Objects → Permissions → Approvers → Review.
  * The stepper and footer are shared across all steps; only the center content swaps.
  */
-export function CreateBlueprintPage() {
+export function CreateBlueprintPage({ service = permissionsService }: { service?: PermissionsService }) {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState<BlueprintStep>(1);
 
@@ -42,17 +44,39 @@ export function CreateBlueprintPage() {
 
   // Step 3 form state
   const [permissionsData, setPermissionsData] = useState<BlueprintPermissionsData>(INITIAL_PERMISSIONS_DATA);
+  const permissionsRef = useRef<PermissionsFormHandle>(null);
+  const actionInProgress = useRef(false);
+  const [permissionsReady, setPermissionsReady] = useState(false);
+  const [working, setWorking] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [draftFeedback, setDraftFeedback] = useState<{ error: boolean; message: string } | null>(null);
+  const handlePermissionsChange = useCallback((value: BlueprintPermissionsData) => {
+    setPermissionsData(value);
+    setDraftFeedback(null);
+  }, []);
 
   // TODO: add state for steps 4–5 as they are implemented
 
-  const handleNext = useCallback(() => {
+  const handleNext = useCallback(async () => {
+    if (actionInProgress.current) return;
+    if (currentStep === 3) {
+      if (!permissionsReady) return;
+      actionInProgress.current = true;
+      setWorking(true);
+      try {
+        if (!await permissionsRef.current?.validate()) return;
+      } finally {
+        actionInProgress.current = false;
+        setWorking(false);
+      }
+    }
     if (currentStep < 5) {
       setCurrentStep((prev) => (prev + 1) as BlueprintStep);
     } else {
       // Final submit — will call backend once available
       console.log('Blueprint submitted:', { setupData, objectsData, permissionsData });
     }
-  }, [currentStep, setupData, objectsData, permissionsData]);
+  }, [currentStep, setupData, objectsData, permissionsData, permissionsReady]);
 
   const handleBack = useCallback(() => {
     if (currentStep > 1) {
@@ -64,10 +88,29 @@ export function CreateBlueprintPage() {
     navigate('/');
   }, [navigate]);
 
-  const handleSaveDraft = useCallback(() => {
-    // TODO: persist draft to backend
-    console.log('Draft saved:', { setupData, objectsData, permissionsData });
-  }, [setupData, objectsData, permissionsData]);
+  const handleSaveDraft = useCallback(async () => {
+    if (actionInProgress.current) return;
+    actionInProgress.current = true;
+    setSaving(true);
+    setDraftFeedback(null);
+    try {
+      let permissions = permissionsData;
+      if (currentStep !== 3) {
+        const selected = await service.getSelectedObjects(objectsData);
+        const discovered = await service.getExistingRolesForObjects(selected, setupData.environment);
+        permissions = reconcilePermissions(permissionsData, selected, discovered, setupData.environment);
+        setPermissionsData(permissions);
+      }
+      await service.savePermissionsDraft({ setup: setupData, objects: objectsData, permissions });
+      setDraftFeedback({ error: false, message: 'Draft saved through the permissions service (mock only; not persisted after leaving this wizard).' });
+    } catch (cause) {
+      if (cause instanceof PermissionsValidationError) permissionsRef.current?.setServerErrors(cause.errors);
+      setDraftFeedback({ error: true, message: cause instanceof Error ? cause.message : 'Unable to save draft. Try again.' });
+    } finally {
+      actionInProgress.current = false;
+      setSaving(false);
+    }
+  }, [setupData, objectsData, permissionsData, service, currentStep]);
 
   return (
     <div className="space-y-6">
@@ -85,20 +128,25 @@ export function CreateBlueprintPage() {
       </div>
 
       {/* Step content */}
-      <div>
+      <fieldset disabled={saving || working} className="min-w-0">
         {currentStep === 1 && (
-          <BlueprintSetupForm data={setupData} onChange={setSetupData} />
+          <BlueprintSetupForm data={setupData} onChange={(value) => { setSetupData(value); setDraftFeedback(null); }} />
         )}
 
         {currentStep === 2 && (
-          <BlueprintObjectsForm data={objectsData} onChange={setObjectsData} />
+          <BlueprintObjectsForm data={objectsData} onChange={(value) => { setObjectsData(value); setDraftFeedback(null); }} />
         )}
 
         {currentStep === 3 && (
           <BlueprintPermissionsForm
             data={permissionsData}
             objectsData={objectsData}
-            onChange={setPermissionsData}
+            environment={setupData.environment}
+            onChange={handlePermissionsChange}
+            ref={permissionsRef}
+            onBack={handleBack}
+            onReadyChange={setPermissionsReady}
+            service={service}
           />
         )}
 
@@ -109,7 +157,9 @@ export function CreateBlueprintPage() {
         {currentStep === 5 && (
           <Placeholder label="Review & Submit" />
         )}
-      </div>
+      </fieldset>
+
+      {draftFeedback && <p role={draftFeedback.error ? 'alert' : 'status'} className={`text-sm ${draftFeedback.error ? 'text-rose-700' : 'text-emerald-700'}`}>{draftFeedback.message}</p>}
 
       {/* Stepper progress bar */}
       <BlueprintStepper currentStep={currentStep} />
@@ -121,6 +171,10 @@ export function CreateBlueprintPage() {
         onNext={handleNext}
         onCancel={handleCancel}
         onSaveDraft={handleSaveDraft}
+        busy={saving || working}
+        saving={saving}
+        nextDisabled={currentStep === 3 && !permissionsReady}
+        saveDisabled={currentStep === 3 && !permissionsReady}
       />
     </div>
   );

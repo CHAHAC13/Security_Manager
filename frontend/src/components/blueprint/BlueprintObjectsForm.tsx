@@ -39,6 +39,7 @@ function ObjectIcon({ kind }: { kind: string }) {
 interface PaginationControlsProps {
   label: string;
   page: number;
+  totalPages: number | null;
   hasPrevious: boolean;
   hasNext: boolean;
   loading: boolean;
@@ -49,6 +50,7 @@ interface PaginationControlsProps {
 function PaginationControls({
   label,
   page,
+  totalPages,
   hasPrevious,
   hasNext,
   loading,
@@ -67,7 +69,7 @@ function PaginationControls({
         Previous
       </button>
       <span className="text-center text-[11px] font-medium text-slate-500">
-        {label} · Page {page}
+        {label} · Page {page}{totalPages !== null ? ` of ${totalPages}` : ''}
       </span>
       <button
         type="button"
@@ -116,6 +118,9 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
     onChange({
       ...data,
       selectedCatalogId: catalogId,
+      selectedCatalog: discovery.catalogs.items.find((catalog) => catalog.id === catalogId)
+        ?? data.proposedCatalogs.find((catalog) => catalog.id === catalogId),
+      selectedSchemas: [],
       selectedSchemaIds: [],
       selectedObjectIds: [],
       selectedObjects: [],
@@ -230,6 +235,14 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
     onChange({
       ...data,
       selectedSchemaIds: nextSchemaIds,
+      selectedSchemas: [
+        ...(data.selectedSchemas ?? []),
+        ...schemas,
+        ...data.proposedSchemas,
+      ].filter((schema, index, all) =>
+        schema.catalogId === data.selectedCatalogId
+        && nextSchemaIds.includes(schema.id)
+        && all.findIndex((item) => item.id === schema.id) === index),
       selectedObjectIds: nextObjectIds,
       selectedObjects: nextSelectedObjects,
       focusedSchemaId: nextFocused,
@@ -441,6 +454,7 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
               <PaginationControls
                 label="Schemas"
                 page={discovery.schemas.pageIndex + 1}
+                totalPages={discovery.schemas.totalPages}
                 hasPrevious={discovery.schemas.hasPreviousPage}
                 hasNext={discovery.schemas.hasNextPage}
                 loading={discovery.schemas.loadingMore}
@@ -557,6 +571,7 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
               <PaginationControls
                 label="Objects"
                 page={discovery.objects.pageIndex + 1}
+                totalPages={discovery.objects.totalPages}
                 hasPrevious={discovery.objects.hasPreviousPage}
                 hasNext={discovery.objects.hasNextPage}
                 loading={discovery.objects.loadingMore}

@@ -23,6 +23,8 @@ export interface DiscoveryPageRequest {
 export interface DiscoveryPage<T> {
   items: T[];
   nextCursor: string | null;
+  totalItems: number;
+  totalPages: number;
 }
 
 export interface ObjectDiscoveryService {
@@ -41,6 +43,8 @@ export interface ObjectDiscoveryService {
 interface ApiPagination {
   page: number;
   has_next: boolean;
+  total_items: number;
+  total_pages: number;
 }
 
 interface ApiPage<T> {
@@ -87,8 +91,14 @@ function apiPage<TApi, TOption>(
   if (!data || !Array.isArray(data.items) || !data.pagination) {
     throw new Error('Unexpected discovery response: items or pagination not found');
   }
+  if (!Number.isInteger(data.pagination.total_items) || data.pagination.total_items < 0
+    || !Number.isInteger(data.pagination.total_pages) || data.pagination.total_pages < 0) {
+    throw new Error('Unexpected discovery response: invalid pagination totals');
+  }
   return {
     items: data.items.map(mapItem),
+    totalItems: data.pagination.total_items,
+    totalPages: data.pagination.total_pages,
     nextCursor: data.pagination.has_next
       ? String(data.pagination.page + 1)
       : null,
@@ -208,6 +218,8 @@ function pageItems<T extends { name: string }>(
 
   return {
     items: page,
+    totalItems: filteredItems.length,
+    totalPages: Math.ceil(filteredItems.length / request.limit),
     nextCursor: nextOffset < filteredItems.length ? String(nextOffset) : null,
   };
 }

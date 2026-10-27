@@ -9,6 +9,10 @@ interface BlueprintFooterProps {
   onNext: () => void;
   onCancel: () => void;
   onSaveDraft: () => void;
+  busy?: boolean;
+  saving?: boolean;
+  nextDisabled?: boolean;
+  saveDisabled?: boolean;
 }
 
 /**
@@ -21,6 +25,10 @@ export function BlueprintFooter({
   onNext,
   onCancel,
   onSaveDraft,
+  busy = false,
+  saving = false,
+  nextDisabled = false,
+  saveDisabled = false,
 }: BlueprintFooterProps) {
   const isFirstStep = currentStep === 1;
   const isLastStep = currentStep === BLUEPRINT_STEPS.length;
@@ -31,7 +39,7 @@ export function BlueprintFooter({
         <Button
           variant="secondary"
           icon={<ArrowLeft className="w-3.5 h-3.5" />}
-          disabled={isFirstStep}
+          disabled={isFirstStep || busy}
           onClick={onBack}
           className={isFirstStep ? 'opacity-50 cursor-not-allowed' : ''}
         >
@@ -40,13 +48,13 @@ export function BlueprintFooter({
       </div>
 
       <div className="flex items-center gap-3">
-        <Button variant="ghost" onClick={onCancel}>
+        <Button variant="ghost" onClick={onCancel} disabled={busy}>
           Cancel
         </Button>
-        <Button variant="secondary" onClick={onSaveDraft}>
-          Save Draft
+        <Button variant="secondary" onClick={onSaveDraft} disabled={busy || saveDisabled}>
+          {saving ? 'Saving...' : 'Save Draft'}
         </Button>
-        <Button variant="primary" onClick={onNext}>
+        <Button variant="primary" onClick={onNext} disabled={busy || nextDisabled}>
           <span>{isLastStep ? 'Submit' : 'Next'}</span>
           {!isLastStep && <ArrowRight className="w-3.5 h-3.5 ml-1.5" />}
         </Button>
