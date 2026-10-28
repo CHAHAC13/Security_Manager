@@ -1,5 +1,0 @@
-INFO:     Started server process [403]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-ERROR:    [Errno 98] error while attempting to bind on address ('0.0.0.0INFO:     127.0.0.1:56772 - "GET /api/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:60962 - "GET /api/v1/discovery/catalogs HTTP/1.1" 200 OK

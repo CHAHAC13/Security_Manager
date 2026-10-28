@@ -7,7 +7,11 @@ from core.cache import discovery_cache
 from core.config import Settings, get_settings
 from schemas.blueprint_models import (
     CatalogResponse,
+    ObjectPrivilegeResponse,
     PaginatedResponse,
+    PrincipalResponse,
+    PrivilegeDetail,
+    PrivilegesRequest,
     SchemaResponse,
     UnityCatalogObjectResponse,
 )
@@ -49,13 +53,16 @@ def optional_string(item: dict[str, Any], key: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def map_catalog(item: dict[str, Any]) -> CatalogResponse:
+def map_catalog(
+    item: dict[str, Any], tags: list[str] | None = None
+) -> CatalogResponse:
     name = required_string(item, "name")
     return CatalogResponse(
         name=name,
         full_name=name,
         catalog_type=optional_string(item, "catalog_type"),
         comment=optional_string(item, "comment"),
+        tags=sorted(tags or []),
     )
 
 
@@ -78,6 +85,7 @@ def map_object(item: dict[str, Any]) -> UnityCatalogObjectResponse | None:
     table_types = {
         "MANAGED",
         "EXTERNAL",
+        "FOREIGN",
         "STREAMING_TABLE",
         "MANAGED_SHALLOW_CLONE",
         "EXTERNAL_SHALLOW_CLONE",
@@ -112,14 +120,126 @@ def map_object(item: dict[str, Any]) -> UnityCatalogObjectResponse | None:
     )
 
 
+def to_databricks_securable_type(securable_type: str) -> str:
+    """
+    Convert the frontend/API securable type into the value expected by
+    the Databricks Unity Catalog permissions API.
+    Unity Catalog handles views through the table securable type.
+    """
+    mapping = {
+        "CATALOG": "catalog",
+        "SCHEMA": "schema",
+        "TABLE": "table",
+        "VIEW": "table",
+    }
+    databricks_type = mapping.get(securable_type.upper())
+    if databricks_type is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "UNSUPPORTED_SECURABLE_TYPE",
+                "message": f"Unsupported securable type: {securable_type}",
+            },
+        )
+    return databricks_type
+
+
+def map_privilege_assignment(
+    assignment: dict[str, Any],
+    securable_type: str,
+    full_name: str,
+    include_inherited: bool,
+) -> ObjectPrivilegeResponse | None:
+    """
+    Convert one Databricks privilege assignment into the response
+    returned to the Access Matrix frontend.
+    """
+    principal = assignment.get("principal")
+    if not isinstance(principal, str) or not principal.strip():
+        return None
+    raw_privileges = assignment.get("privileges", [])
+    if not isinstance(raw_privileges, list):
+        raise DatabricksApiError(
+            502,
+            "Databricks returned an invalid privileges field.",
+        )
+    privileges: list[PrivilegeDetail] = []
+    for item in raw_privileges:
+        # Direct permissions API can return privileges as strings.
+        if isinstance(item, str):
+            privilege_name = item.strip()
+            if privilege_name:
+                privileges.append(
+                    PrivilegeDetail(
+                        privilege=privilege_name,
+                        inherited=False,
+                    )
+                )
+            continue
+        # Effective permissions API returns privilege objects.
+        if not isinstance(item, dict):
+            continue
+        privilege_name = item.get("privilege")
+        if not isinstance(privilege_name, str) or not privilege_name.strip():
+            continue
+        inherited_from_type = item.get("inherited_from_type")
+        inherited_from_name = (
+            item.get("inherited_from_name")
+            or item.get("inherited_from")
+        )
+        inherited = bool(
+            inherited_from_type
+            or inherited_from_name
+        )
+        # Defensive filtering in case the upstream effective-permissions
+        # response contains inherited values while they were not requested.
+        if inherited and not include_inherited:
+            continue
+        privileges.append(
+            PrivilegeDetail(
+                privilege=privilege_name.strip(),
+                inherited=inherited,
+                inherited_from_type=(
+                    inherited_from_type
+                    if isinstance(inherited_from_type, str)
+                    else None
+                ),
+                inherited_from_name=(
+                    inherited_from_name
+                    if isinstance(inherited_from_name, str)
+                    else None
+                ),
+            )
+        )
+    if not privileges:
+        return None
+    privileges.sort(
+        key=lambda item: (
+            item.privilege,
+            item.inherited,
+            item.inherited_from_name or "",
+        )
+    )
+    return ObjectPrivilegeResponse(
+        securable_type=securable_type,
+        full_name=full_name,
+        # Your existing schema calls this group_name. Databricks may return
+        # a group, user, or service principal here.
+        principal=principal.strip(),
+        privileges=privileges,
+    )
+
 @router.get("/catalogs", response_model=PaginatedResponse[CatalogResponse])
 async def get_catalogs(
     search: str | None = Query(default=None, max_length=200),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     client: DatabricksUnityCatalogClient = Depends(get_databricks_client),
+    settings: Settings = Depends(get_settings),
 ) -> PaginatedResponse[CatalogResponse]:
-    cache_key = "catalogs"
+    tag_names = settings.catalog_tag_names
+    # Include the tag filter in the cache key so a config change never serves stale results.
+    cache_key = f"catalogs:tags={','.join(tag_names)}"
     cached = await discovery_cache.get(cache_key)
     cache_hit = cached is not None
 
@@ -127,15 +247,30 @@ async def get_catalogs(
         catalogs = cached
     else:
         try:
-            raw_items = await client.list_catalogs()
-            catalogs = [map_catalog(item).model_dump() for item in raw_items]
+            if tag_names:
+                raw_items, tags_by_catalog = await asyncio.gather(
+                    client.list_catalogs(),
+                    client.list_catalog_tags(tag_names),
+                )
+                # Keep only catalogs that carry at least one of the configured tags.
+                catalogs = [
+                    map_catalog(item, tags_by_catalog[item["name"]]).model_dump()
+                    for item in raw_items
+                    if isinstance(item.get("name"), str)
+                    and item["name"] in tags_by_catalog
+                ]
+            else:
+                raw_items = await client.list_catalogs()
+                catalogs = [map_catalog(item).model_dump() for item in raw_items]
         except DatabricksApiError as exc:
             raise_databricks_error(exc)
         await discovery_cache.set(cache_key, catalogs)
 
     items = [CatalogResponse(**item) for item in catalogs]
     filtered = filter_by_search(
-        items, search, lambda item: (item.name, item.full_name, item.comment)
+        items,
+        search,
+        lambda item: (item.name, item.full_name, item.comment, *item.tags),
     )
     page_items, pagination = paginate_items(filtered, page, page_size)
     return PaginatedResponse[CatalogResponse](
@@ -187,12 +322,12 @@ async def get_schemas(
 
 
 @router.get(
-    "/catalogs/{catalog_name}/objects",
+    "/catalogs/{catalog_name}/schemas/{schema_name}/objects",
     response_model=PaginatedResponse[UnityCatalogObjectResponse],
 )
 async def get_objects(
     catalog_name: str,
-    schema_names: list[str] = Query(..., min_length=1, max_length=20),
+    schema_name: str,
     search: str | None = Query(default=None, max_length=200),
     object_type: Literal["TABLE", "VIEW", "ALL"] = Query(default="ALL"),
     page: int = Query(default=1, ge=1),
@@ -200,7 +335,11 @@ async def get_objects(
     client: DatabricksUnityCatalogClient = Depends(get_databricks_client),
     settings: Settings = Depends(get_settings),
 ) -> PaginatedResponse[UnityCatalogObjectResponse]:
-    normalized_schemas = sorted({name.strip() for name in schema_names if name.strip()})
+    # schema_name supports multiple selection as a comma-separated list,
+    # e.g. /catalogs/main/schemas/sales,finance/objects
+    normalized_schemas = sorted(
+        {name.strip() for name in schema_name.split(",") if name.strip()}
+    )
     if not normalized_schemas:
         raise HTTPException(status_code=422, detail="At least one non-empty schema is required.")
     if len(normalized_schemas) > 20:
@@ -216,9 +355,9 @@ async def get_objects(
     else:
         semaphore = asyncio.Semaphore(settings.discovery_max_schema_requests)
 
-        async def fetch_schema(schema_name: str) -> list[dict[str, Any]]:
+        async def fetch_schema(name: str) -> list[dict[str, Any]]:
             async with semaphore:
-                return await client.list_tables_and_views(catalog_name, schema_name)
+                return await client.list_tables_and_views(catalog_name, name)
 
         try:
             results = await asyncio.gather(
@@ -257,3 +396,81 @@ async def get_objects(
         search=search,
         cached=cache_hit,
     )
+
+@router.post(
+    "/privileges",
+    response_model=list[ObjectPrivilegeResponse],
+)
+async def get_privileges(
+    request: PrivilegesRequest,
+    client: DatabricksUnityCatalogClient = Depends(
+        get_databricks_client
+    ),
+    settings: Settings = Depends(get_settings),
+) -> list[ObjectPrivilegeResponse]:
+    """
+    Return principals and privileges for the securables selected in
+    the Blueprint Editor.
+    include_inherited=True:
+        Returns direct and inherited privileges.
+    include_inherited=False:
+        Returns only privileges assigned directly on each securable.
+    """
+    # Prevent duplicate Databricks calls if the frontend accidentally sends
+    # the same securable more than once.
+    unique_selections = list(
+        {
+            (
+                selection.securable_type,
+                selection.full_name,
+            ): selection
+            for selection in request.securables
+        }.values()
+    )
+    semaphore = asyncio.Semaphore(
+        settings.discovery_max_schema_requests
+    )
+    async def fetch_privileges(
+        selection: Any,
+    ) -> list[ObjectPrivilegeResponse]:
+        async with semaphore:
+            databricks_type = to_databricks_securable_type(
+                selection.securable_type
+            )
+            assignments = await client.get_privilege_assignments(
+                securable_type=databricks_type,
+                full_name=selection.full_name,
+                effective=request.include_inherited,
+            )
+            mapped_assignments: list[ObjectPrivilegeResponse] = []
+            for assignment in assignments:
+                mapped = map_privilege_assignment(
+                    assignment=assignment,
+                    securable_type=selection.securable_type,
+                    full_name=selection.full_name,
+                    include_inherited=request.include_inherited,
+                )
+                if mapped is not None:
+                    mapped_assignments.append(mapped)
+            return mapped_assignments
+    try:
+        results = await asyncio.gather(
+            *(
+                fetch_privileges(selection)
+                for selection in unique_selections
+            )
+        )
+    except DatabricksApiError as exc:
+        raise_databricks_error(exc)
+    flattened = [
+        assignment
+        for result in results
+        for assignment in result
+    ]
+    flattened.sort(
+        key=lambda item: (
+            item.full_name,
+            item.principal.lower(),
+        )
+    )
+    return flattened
