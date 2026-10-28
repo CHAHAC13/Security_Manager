@@ -31,7 +31,7 @@ export interface BlueprintFormData {
   setup: BlueprintSetupData;
   objects: BlueprintObjectsData;
   permissions: BlueprintPermissionsData;
-  // approvers: BlueprintApproversData;
+  approvers: BlueprintApproversData;
 }
 
 export const INITIAL_SETUP_DATA: BlueprintSetupData = {
@@ -194,4 +194,35 @@ export interface BlueprintPermissionsData {
 export const INITIAL_PERMISSIONS_DATA: BlueprintPermissionsData = {
   roleAssignments: [],
   discoveredRoleIds: [],
+};
+
+/* ── Step 4: Approvers types ── */
+
+/** An individual user from the corporate directory. */
+export interface Approver {
+  id: string;
+  displayName: string;
+  email: string;
+  department?: string;
+}
+
+export type ApproverType = 'technical' | 'business';
+
+export interface RoleApprovers {
+  technical: Approver[];
+  business: Approver[];
+}
+
+/** Approvers keyed by RoleAssignment.id. */
+export type RoleApproversMap = Record<string, RoleApprovers>;
+
+export interface BlueprintApproversData {
+  approvers: RoleApproversMap;
+  /** Existing roles whose current approvers were already fetched, so user removals are not re-filled. */
+  prefilledRoleIds: string[];
+}
+
+export const INITIAL_APPROVERS_DATA: BlueprintApproversData = {
+  approvers: {},
+  prefilledRoleIds: [],
 };

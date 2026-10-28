@@ -145,6 +145,42 @@ Known unrelated repository-wide validation blockers at implementation time:
 the Permissions change. The production Vite build and the changed-file ESLint
 check pass independently.
 
+## Blueprint Approvers (Step 4)
+
+Assigns at least one Technical/System Owner and one Domain/Business Owner to
+every role produced by the Permissions step. Roles are read from wizard state
+(`permissionsData.roleAssignments`) and never refetched; approvers are stored in
+`BlueprintFormData.approvers` as `{ approvers: { [roleId]: { technical, business } }, prefilledRoleIds }`.
+
+| File | Responsibility |
+|---|---|
+| `src/config/approverConfig.ts` | `MAX_APPROVERS_PER_TYPE`, `ALLOW_SAME_PERSON_BOTH_TYPES`, debounce/min chars, `USE_MOCK`, mock latency/error toggle, endpoint placeholders. |
+| `src/services/approverService.ts` | `ApproverService` contract + request/response types, mock implementation, HTTP adapter (`apiClient`). |
+| `src/data/approverData.ts` | Mock directory users, known role approvers and sample roles. |
+| `src/lib/approvers.ts` | Pure validation, add/remove, Apply-to-All, reconcile/prefill, filter and scope helpers (unit-tested). |
+| `src/hooks/useApprovers.ts` | Prefills existing roles once, prunes removed roles, loads scope labels, loading/error/retry. |
+| `src/components/blueprint/BlueprintApproversForm.tsx` | Step orchestration: header/progress, toolbar, banner, table, modal, toast, empty state. |
+| `ApproverTable`, `ApproverCell`, `UserPickerTypeahead`, `ApplyToAllModal`, `ValidationBanner` | Reusable building blocks in `src/components/blueprint/`. |
+
+### Switching to the real API
+
+1. Implement backend endpoints matching the types in `approverService.ts`:
+   `GET /api/directory/users?q=`, `GET /api/blueprints/{id}/approvers?roleIds=`,
+   `PUT /api/blueprints/{id}/approvers` (body `{ approvers }`, response `{ success, savedAt }`).
+2. Set `VITE_APPROVERS_USE_MOCK=false` (or change `USE_MOCK`). No UI changes needed.
+3. Replace the wizard's client-generated `draft-<uuid>` blueprint id with the id issued by the backend.
+
+Mock failures can be simulated with `VITE_APPROVERS_MOCK_ERROR=true` or
+`setMockApproverError(true)`.
+
+### Behaviour notes
+
+- Next ("Next: Review & Submit") is disabled until every role is complete; Save Draft is always allowed.
+- Existing-role approvers are prefilled once per role (`prefilledRoleIds`), so user removals are not re-filled on revisit.
+- Apply to All supports Add/Replace and "Only roles missing approvers" (fills only empty columns); replacing that would remove approvers requires confirmation.
+- Same person in both columns is a warning when `ALLOW_SAME_PERSON_BOTH_TYPES` is true, otherwise a blocking error.
+- UI validation is not a security boundary; the backend must re-validate approvers, reject service accounts and enforce self-approval rules.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

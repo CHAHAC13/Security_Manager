@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { CreateBlueprintPage } from './CreateBlueprintPage';
 import { createMockPermissionsService, PermissionsValidationError, type PermissionsService } from '@/services/permissionsService';
+import { createMockApproverService, type ApproverService } from '@/services/approverService';
 import type { BlueprintFormData, BlueprintObjectsData } from '@/types/blueprint';
 import { objects, objectsData } from '@/test/permissionFixtures';
 
@@ -16,14 +17,14 @@ vi.mock('@/components/blueprint/BlueprintObjectsForm', () => ({
   ),
 }));
 
-async function enterPermissions(overrides: Partial<PermissionsService> = {}) {
+async function enterPermissions(overrides: Partial<PermissionsService> = {}, approverService?: ApproverService) {
   const service: PermissionsService = {
     ...createMockPermissionsService(),
     getSelectedObjects: async (data) => data.selectedObjectIds.length ? objects : objects.slice(0, 2),
     getExistingRolesForObjects: async () => [],
     ...overrides,
   };
-  render(<MemoryRouter><CreateBlueprintPage service={service} /></MemoryRouter>);
+  render(<MemoryRouter><CreateBlueprintPage service={service} approverService={approverService} /></MemoryRouter>);
   await userEvent.click(screen.getByRole('button', { name: 'Next' }));
   await userEvent.click(screen.getByRole('button', { name: 'Select test objects' }));
   await userEvent.click(screen.getByRole('button', { name: 'Next' }));
@@ -45,7 +46,7 @@ describe('wizard permissions integration', () => {
     await addRole();
     await userEvent.click(screen.getByRole('checkbox', { name: 'study: SELECT' }));
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
-    expect(await screen.findByText('Approvers — coming soon')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Assign Approvers' })).toBeTruthy();
     expect(validate).toHaveBeenCalledOnce();
   });
 
@@ -127,6 +128,49 @@ describe('wizard permissions integration', () => {
     await waitFor(() => expect(save).toHaveBeenCalledOnce());
     const payload = save.mock.calls[0][0] as BlueprintFormData;
     expect(payload.permissions.roleAssignments[0].objectPermissions.map((object) => object.objectId)).toEqual(['c1', 's1']);
+  });
+
+  it('gates Approvers Next on complete roles, saves approver drafts and keeps approvers across Back/Next', async () => {
+    const approvers = createMockApproverService({ latencyMs: [0, 0], shouldFail: () => false });
+    const saveApprovers = vi.spyOn(approvers, 'saveApproversDraft');
+    const savePermissions = vi.fn().mockResolvedValue(undefined);
+    await enterPermissions({ validateRoleName: async () => ({ valid: true }), savePermissionsDraft: savePermissions }, approvers);
+    await addRole();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'study: SELECT' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('0 of 1 roles complete');
+    const next = () => screen.getByRole<HTMLButtonElement>('button', { name: /Next: Review & Submit/ });
+    expect(next().disabled).toBe(true);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save Draft' }));
+    await waitFor(() => expect(saveApprovers).toHaveBeenCalledOnce());
+    expect(await screen.findByText(/Draft saved through the permissions and approver services/)).toBeTruthy();
+
+    const [technical, business] = screen.getAllByRole('combobox');
+    for (const [input, query] of [[technical, 'Omar'], [business, 'Grace']] as const) {
+      await userEvent.type(input, query);
+      await screen.findByRole('option', {}, { timeout: 2000 });
+      await userEvent.keyboard('{Enter}');
+    }
+    await screen.findByText('1 of 1 roles complete');
+    await waitFor(() => expect(next().disabled).toBe(false));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Back' }));
+    await screen.findByRole('button', { name: '+ Create Role Assignment' });
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(await screen.findByText('1 of 1 roles complete')).toBeTruthy();
+    expect(screen.getByText('Omar Haddad')).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save Draft' }));
+    await waitFor(() => expect(saveApprovers).toHaveBeenCalledTimes(2));
+    const [, saved] = saveApprovers.mock.calls[1];
+    const roleId = Object.keys(saved)[0];
+    expect(saved[roleId].technical.map((user) => user.displayName)).toEqual(['Omar Haddad']);
+    expect((savePermissions.mock.calls[1][0] as BlueprintFormData).approvers.approvers[roleId].business[0].displayName).toBe('Grace Okafor');
+
+    await waitFor(() => expect(next().disabled).toBe(false));
+    await userEvent.click(next());
+    expect(await screen.findByText('Review & Submit — coming soon')).toBeTruthy();
   });
 
   it('renders server save errors next to role fields', async () => {
