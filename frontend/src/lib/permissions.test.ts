@@ -5,7 +5,7 @@ import { INITIAL_OBJECTS_DATA, INITIAL_PERMISSIONS_DATA } from '@/types/blueprin
 import type { BlueprintPermissionsData, RoleLevel } from '@/types/blueprint';
 import { objects, objectsData } from '@/test/permissionFixtures';
 import {
-  activeRequestManager, createRole, generateRoleName, inheritedCatalogPermissions,
+  activeRequestManager, createRole, generateRoleName,
   permissionChanges, reconcilePermissions, refreshRole, requestManagerChanges,
   scopeOptions, scopedObjects, validatePermissions,
 } from './permissions';
@@ -77,6 +77,19 @@ describe('validation', () => {
     role.objectPermissions[0].permissions = ['SELECT'];
     expect(validate(config(role)).roles.r1.objectPermissions).toMatch(/not valid/);
   });
+  it('accepts discovered originals only on the same role/resource, without allowing arbitrary new grants', () => {
+    const role = { ...newRole(), status: 'EXISTING' as const };
+    role.objectPermissions[0] = {
+      ...role.objectPermissions[0], originalPermissions: ['READ VOLUME', 'EXECUTE', 'SELECT'],
+      permissions: ['READ VOLUME', 'EXECUTE', 'SELECT'],
+    };
+    expect(validate(config(role))).toEqual({ roles: {} });
+    const otherRole = { ...newRole(), id: 'r2', status: 'EXISTING' as const, roleName: 'other-role' };
+    otherRole.objectPermissions[0].permissions = ['READ VOLUME'];
+    expect(validate(config(otherRole)).roles.r2.objectPermissions).toMatch(/not valid/);
+    role.objectPermissions[1].permissions = ['READ VOLUME'];
+    expect(validate(config(role)).roles.r1.objectPermissions).toMatch(/not valid/);
+  });
   it('preserves read-only existing names instead of applying a newly generated prefix', () => {
     const role = { ...newRole(), status: 'EXISTING' as const, roleName: 'dbx-prd-gpd-user-legacy' };
     expect(validate(config(role))).toEqual({ roles: {} });
@@ -120,11 +133,12 @@ describe('change tracking and inheritance', () => {
     role.objectPermissions[0].permissions = ['USE CATALOG', 'BROWSE'];
     expect(permissionChanges(role)).toEqual([]);
   });
-  it('shows catalog information without modifying child selections', () => {
+  it('does not invent child permissions or inheritance when catalog grants are edited', () => {
     const role = newRole();
     role.objectPermissions[0].permissions = ['USE CATALOG', 'BROWSE'];
-    expect(inheritedCatalogPermissions(role, objects[2], objects)).toEqual(['USE CATALOG', 'BROWSE']);
     expect(role.objectPermissions[2].permissions).toEqual([]);
+    expect(role.objectPermissions[2].discoveredAssignments).toBeUndefined();
+    expect(permissionChanges(role).every((change) => change.objectId === 'c1')).toBe(true);
   });
   it('tracks RM changes against immutable original settings and clears disabled values', () => {
     const role = newRole();

@@ -234,6 +234,7 @@ async def get_catalogs(
     search: str | None = Query(default=None, max_length=200),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    search_by: Literal["all", "name"] = Query(default="all"),
     client: DatabricksUnityCatalogClient = Depends(get_databricks_client),
     settings: Settings = Depends(get_settings),
 ) -> PaginatedResponse[CatalogResponse]:
@@ -270,7 +271,8 @@ async def get_catalogs(
     filtered = filter_by_search(
         items,
         search,
-        lambda item: (item.name, item.full_name, item.comment, *item.tags),
+        lambda item: (item.name,) if search_by == "name"
+        else (item.name, item.full_name, item.comment, *item.tags),
     )
     page_items, pagination = paginate_items(filtered, page, page_size)
     return PaginatedResponse[CatalogResponse](

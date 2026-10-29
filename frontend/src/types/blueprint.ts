@@ -129,11 +129,26 @@ export interface PermissionObject {
   parentId: string | null;
 }
 
+export interface DiscoveredPrivilege {
+  readonly privilege: string;
+  readonly inherited: boolean;
+  readonly inherited_from_type?: string | null;
+  readonly inherited_from_name?: string | null;
+}
+
+export interface DiscoveredPermissionAssignment {
+  readonly securable_type: Exclude<PermissionObjectType, 'FUNCTION'>;
+  readonly full_name: string;
+  readonly principal: string;
+  readonly privileges: readonly DiscoveredPrivilege[];
+}
+
 export interface ObjectPermission {
   objectId: string;
   objectName: string;
   objectType: PermissionObjectType;
   readonly originalPermissions: readonly string[];
+  readonly discoveredAssignments?: readonly DiscoveredPermissionAssignment[];
   permissions: string[];
 }
 

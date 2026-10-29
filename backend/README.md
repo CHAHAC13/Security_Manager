@@ -9,6 +9,7 @@ Endpoints**
 ·	`POST /api/v1/discovery/privileges` (returns a list with one entry per selected securable and `principal`, with its privileges; body `{"securables": [{"securable_type": "CATALOG|SCHEMA|TABLE|VIEW", "full_name": "..."}], "include_inherited": true}`, up to 100 securables)
 Search, pagination, and object-type filtering are supported by the discovery endpoints.
 `GET /api/v1/discovery/catalogs` returns only catalogs that carry at least one of the Unity Catalog tag names in `CATALOG_TAG_FILTER` (default: `gpdip`, `gpdip_dev`, `gpdip_stg`, `gpdip_prod`). Each catalog in the response includes a `tags` list, and `search` also matches tag names. Tags are read in one query from `system.information_schema.catalog_tags` via the SQL Statement Execution API, so a SQL warehouse is required.
+Catalog search accepts `search_by=all|name` (default `all`). `all` retains name, full-name, comment, and tag matching; `name` restricts the case-insensitive substring search to catalog names. The Objects catalog picker sends `search_by=name` so shared `gpdip` tags do not cause unrelated catalog names to match. Search runs before pagination, and totals reflect the filtered results. Tag eligibility filtering still applies in either search mode.
 Environment variables
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
