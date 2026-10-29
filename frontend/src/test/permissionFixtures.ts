@@ -1,4 +1,4 @@
-import type { BlueprintObjectsData, PermissionObject } from '@/types/blueprint';
+import type { BlueprintObjectsData, DiscoveredPermissionAssignment, DiscoveredPrivilege, PermissionObject } from '@/types/blueprint';
 import { INITIAL_OBJECTS_DATA } from '@/types/blueprint';
 
 export const objects: PermissionObject[] = [
@@ -18,3 +18,38 @@ export const objectsData: BlueprintObjectsData = {
   selectedObjectIds: ['table'],
   selectedObjects: [{ id: 'table', name: 'study', schemaId: 'sch', kind: 'table', source: 'existing' }],
 };
+
+function direct(privilege: string): DiscoveredPrivilege {
+  return { privilege, inherited: false, inherited_from_type: null, inherited_from_name: null };
+}
+
+function inherited(privilege: string, type: string, name: string): DiscoveredPrivilege {
+  return { privilege, inherited: true, inherited_from_type: type, inherited_from_name: name };
+}
+
+export const effectivePermissionResponse: DiscoveredPermissionAssignment[] = [
+  {
+    securable_type: 'CATALOG', full_name: 'odx', principal: 'support-team',
+    privileges: ['BROWSE', 'EXECUTE', 'READ_VOLUME', 'SELECT', 'USE_CATALOG', 'USE_SCHEMA'].map(direct),
+  },
+  {
+    securable_type: 'SCHEMA', full_name: 'odx.cdm', principal: 'support-team',
+    privileges: ['EXECUTE', 'READ_VOLUME', 'SELECT', 'USE_SCHEMA'].map((privilege) => inherited(privilege, 'CATALOG', 'odx')),
+  },
+  {
+    securable_type: 'TABLE', full_name: 'odx.cdm.study', principal: 'support-team',
+    privileges: [inherited('SELECT', 'CATALOG', 'odx')],
+  },
+  {
+    securable_type: 'SCHEMA', full_name: 'odx.cdm', principal: 'account users',
+    privileges: [direct('USE_SCHEMA')],
+  },
+  {
+    securable_type: 'TABLE', full_name: 'odx.cdm.study', principal: 'account users',
+    privileges: [direct('SELECT')],
+  },
+  {
+    securable_type: 'CATALOG', full_name: 'odx', principal: 'inherited-only',
+    privileges: [inherited('READ_METADATA', 'METASTORE', 'test-metastore')],
+  },
+];

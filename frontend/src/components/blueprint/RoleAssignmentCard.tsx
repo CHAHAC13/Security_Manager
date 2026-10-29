@@ -29,7 +29,8 @@ export function RoleAssignmentCard({ role, objects, metadata, environment, error
   const revokes = changes.filter((change) => change.changeType === 'REVOKE').length;
   const rmChanges = requestManagerChanges(role);
   const existing = role.status === 'EXISTING';
-  const roleType = metadata.roleTypes.find((type) => type.code === role.roleTypeCode)?.label ?? role.roleTypeCode;
+  const roleType = metadata.roleTypes.find((type) => type.code === role.roleTypeCode)?.label
+    ?? role.roleTypeCode;
   const fieldId = (field: string) => `${role.id}-${field}`;
   const accessibility = (field: RoleField) => ({
     id: fieldId(field), 'aria-invalid': Boolean(errors[field]),
@@ -46,7 +47,9 @@ export function RoleAssignmentCard({ role, objects, metadata, environment, error
         className={cn('flex w-max min-w-full items-center gap-3 px-4 py-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-500', expanded && 'bg-sky-50/50')}>
         <span className="min-w-32 max-w-80 flex-1 truncate font-mono text-xs font-semibold text-slate-900" title={role.roleName}>{role.roleName || 'Untitled role'}</span>
         <Badge variant={existing ? 'blue' : 'emerald'}>{existing ? 'Existing' : 'New'}</Badge>
-        <span className="shrink-0 whitespace-nowrap text-xs text-slate-500">{levelLabels[role.level]} &middot; {roleType}</span>
+        <span className="shrink-0 whitespace-nowrap text-xs text-slate-500">
+          {levelLabels[role.level]}{roleType && <> &middot; {roleType}</>}
+        </span>
         {(grants > 0 || revokes > 0) && <span className="shrink-0 whitespace-nowrap text-[10px] text-slate-500">+{grants} granted, -{revokes} revoked</span>}
         <ChevronDown aria-hidden="true" className={cn('h-4 w-4 shrink-0 text-slate-500 transition-transform motion-reduce:transition-none', expanded && 'rotate-180')} />
       </button>

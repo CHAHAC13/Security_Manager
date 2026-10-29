@@ -9,6 +9,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -16,6 +17,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from core.cache import discovery_cache
 from core.config import Settings
 from schemas.blueprint_models import CatalogResponse
 from services.databricks_client import DatabricksApiError, DatabricksUnityCatalogClient
@@ -80,7 +82,7 @@ class TestCatalogTagNamesProperty:
 class TestListCatalogTags:
     def test_empty_tag_names_returns_empty_dict(self) -> None:
         client = _make_client()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             client.list_catalog_tags([])
         )
         assert result == {}
@@ -89,7 +91,7 @@ class TestListCatalogTags:
         settings = _make_settings(DATABRICKS_WAREHOUSE_ID=None)
         client = _make_client(settings)
         with pytest.raises(DatabricksApiError, match="DATABRICKS_WAREHOUSE_ID"):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 client.list_catalog_tags(["gpdip_dev"])
             )
 
@@ -107,7 +109,7 @@ class TestListCatalogTags:
 
         client._post = fake_post  # type: ignore[assignment]
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             client.list_catalog_tags(["gpdip_dev", "gpdip_stg", "gpdip_prod"])
         )
         assert result == {
@@ -123,7 +125,7 @@ class TestListCatalogTags:
         client = _make_client()
         client._post = AsyncMock(return_value=_sql_success_payload(rows))  # type: ignore[assignment]
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             client.list_catalog_tags(["gpdip"])
         )
         assert result == {"catalog_x": ["gpdip"]}
@@ -138,7 +140,7 @@ class TestListCatalogTags:
         client = _make_client()
         client._post = AsyncMock(return_value=_sql_success_payload(rows))  # type: ignore[assignment]
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             client.list_catalog_tags(["gpdip"])
         )
         assert result == {"catalog_ok": ["gpdip"]}
@@ -155,7 +157,7 @@ class TestListCatalogTags:
         client._post = AsyncMock(return_value=failed_payload)  # type: ignore[assignment]
 
         with pytest.raises(DatabricksApiError, match="Syntax error"):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 client.list_catalog_tags(["gpdip"])
             )
 
@@ -282,3 +284,66 @@ class TestGetCatalogsNoTagFilter:
         resp = client.get("/api/v1/discovery/catalogs")
         for item in resp.json()["items"]:
             assert item["tags"] == []
+
+
+class TestCatalogNameSearch:
+    @pytest.fixture()
+    def client(self) -> Iterator[TestClient]:
+        discovery_cache._cache.clear()
+        catalogs = [
+            {"name": "unrelated", "comment": "gpdip", "catalog_type": "MANAGED"},
+            {"name": "gpdip_first", "catalog_type": "MANAGED"},
+            {"name": "GPDiP_second", "catalog_type": "MANAGED"},
+            {"name": "gpdip_untagged", "catalog_type": "MANAGED"},
+        ]
+        tags = {item["name"]: ["gpdip_prod"] for item in catalogs[:3]}
+        with patch.object(
+            DatabricksUnityCatalogClient, "list_catalogs",
+            new_callable=AsyncMock, return_value=catalogs,
+        ), patch.object(
+            DatabricksUnityCatalogClient, "list_catalog_tags",
+            new_callable=AsyncMock, return_value=tags,
+        ):
+            yield TestClient(_build_test_app(_make_settings()))
+        discovery_cache._cache.clear()
+
+    def test_name_only_filters_before_pagination(self, client: TestClient) -> None:
+        for page, expected_name in [(1, "gpdip_first"), (2, "GPDiP_second")]:
+            response = client.get("/api/v1/discovery/catalogs", params={
+                "search": " GPDiP ", "search_by": "name", "page": page, "page_size": 1,
+            })
+            assert response.status_code == 200
+            body = response.json()
+            assert [item["name"] for item in body["items"]] == [expected_name]
+            assert body["pagination"]["total_items"] == 2
+            assert body["pagination"]["total_pages"] == 2
+            assert body["pagination"]["has_next"] is (page == 1)
+
+    @pytest.mark.parametrize("search", ["gpdip_prod", "missing"])
+    def test_name_only_ignores_tag_and_comment_matches(self, client: TestClient, search: str) -> None:
+        response = client.get("/api/v1/discovery/catalogs", params={
+            "search": search, "search_by": "name",
+        })
+        assert response.status_code == 200
+        assert response.json()["items"] == []
+        assert response.json()["pagination"]["total_items"] == 0
+
+    @pytest.mark.parametrize("search_by", [None, "all"])
+    def test_existing_search_still_matches_tags(self, client: TestClient, search_by: str | None) -> None:
+        params = {"search": "gpdip_prod"}
+        if search_by is not None:
+            params["search_by"] = search_by
+        response = client.get("/api/v1/discovery/catalogs", params=params)
+        assert response.status_code == 200
+        assert response.json()["pagination"]["total_items"] == 3
+
+    def test_empty_name_search_keeps_all_tag_eligible_catalogs(self, client: TestClient) -> None:
+        response = client.get("/api/v1/discovery/catalogs", params={
+            "search": " ", "search_by": "name",
+        })
+        assert response.status_code == 200
+        assert response.json()["pagination"]["total_items"] == 3
+
+    def test_invalid_search_mode_is_rejected(self, client: TestClient) -> None:
+        response = client.get("/api/v1/discovery/catalogs", params={"search_by": "invalid"})
+        assert response.status_code == 422
