@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import apiClient from '@/lib/apiClient';
 import { permissionChanges, reconcilePermissions, validatePermissions } from '@/lib/permissions';
 import { effectivePermissionResponse, objectsData } from '@/test/permissionFixtures';
-import { INITIAL_PERMISSIONS_DATA, type PermissionObject } from '@/types/blueprint';
+import { INITIAL_APPROVERS_DATA, INITIAL_PERMISSIONS_DATA, type PermissionObject } from '@/types/blueprint';
 import { apiPermissionsService, permissionsService, selectedPermissionObjects } from './permissionsService';
 
 vi.mock('@/lib/apiClient', () => ({ default: { post: vi.fn() } }));
@@ -320,7 +320,7 @@ describe('permissions API adapter', () => {
     await expect(apiPermissionsService.savePermissionsDraft({
       objects: objectsData, setup: {
         environment: 'dev', name: '', version: '', description: '', businessJustification: '',
-      }, permissions: INITIAL_PERMISSIONS_DATA,
+      }, permissions: INITIAL_PERMISSIONS_DATA, approvers: INITIAL_APPROVERS_DATA,
     })).rejects.toThrow('Draft saving is not available yet');
     expect(apiClient.post).not.toHaveBeenCalled();
   });

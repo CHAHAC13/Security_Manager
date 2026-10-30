@@ -85,7 +85,7 @@ describe('Objects to Permissions discovery integration', () => {
       ], include_inherited: true,
     });
     await user.click(screen.getByRole('button', { name: 'Next' }));
-    expect(await screen.findByText('Approvers — coming soon')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Assign Approvers' })).toBeTruthy();
   }, 15_000);
 
   it('retains schemas and objects across pages, focus changes and return navigation', async () => {
