@@ -15,6 +15,7 @@ import {
 import { cn } from '@/lib/utils';
 import { CatalogPicker } from './CatalogPicker';
 import { objectDiscoveryKey, useObjectDiscovery } from '@/hooks/useObjectDiscovery';
+import { objectDiscoveryService } from '@/services/objectDiscoveryService';
 import type { BlueprintObjectsData, ObjectKind, ObjectOption } from '@/types/blueprint';
 
 interface BlueprintObjectsFormProps {
@@ -134,7 +135,7 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
     setProposalError(null);
   }
 
-  function addProposedResource(event: FormEvent<HTMLFormElement>) {
+  async function addProposedResource(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = proposalName.trim();
     if (!name) {
@@ -143,11 +144,34 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
     }
 
     const normalizedName = name.toLocaleLowerCase();
-    const duplicate = activeCreation === 'catalog'
-      ? [...discovery.catalogs.items, ...data.proposedCatalogs].some((item) => item.name.toLocaleLowerCase() === normalizedName)
-      : activeCreation === 'schema'
-        ? [...schemas, ...data.proposedSchemas.filter((schema) => schema.catalogId === data.selectedCatalogId)].some((item) => item.name.toLocaleLowerCase() === normalizedName)
-        : [...discovery.objects.getCachedItems(objectDiscoveryKey(data.selectedCatalogId, focusedSchema?.id ?? '')), ...data.proposedObjects.filter((object) => object.schemaId === focusedSchema?.id)].some((item) => item.name.toLocaleLowerCase() === normalizedName);
+    let duplicate: boolean;
+    if (activeCreation === 'catalog') {
+      duplicate = data.proposedCatalogs.some((item) => item.name.toLocaleLowerCase() === normalizedName);
+      let cursor: string | null = null;
+      try {
+        while (!duplicate) {
+          const page = await objectDiscoveryService.getCatalogs({
+            limit: 100,
+            cursor,
+            search: name,
+          });
+          duplicate = page.items.some((item) => item.name.toLocaleLowerCase() === normalizedName);
+          if (duplicate || !page.nextCursor) break;
+          cursor = page.nextCursor;
+        }
+      } catch {
+        setProposalError('Unable to validate catalog name. Please try again.');
+        return;
+      }
+    } else if (activeCreation === 'schema') {
+      duplicate = [...schemas, ...data.proposedSchemas.filter((schema) => schema.catalogId === data.selectedCatalogId)]
+        .some((item) => item.name.toLocaleLowerCase() === normalizedName);
+    } else {
+      duplicate = [
+        ...discovery.objects.getCachedItems(objectDiscoveryKey(data.selectedCatalogId, focusedSchema?.id ?? '')),
+        ...data.proposedObjects.filter((object) => object.schemaId === focusedSchema?.id),
+      ].some((item) => item.name.toLocaleLowerCase() === normalizedName);
+    }
 
     if (duplicate) {
       setProposalError('An item with this name already exists in this location.');
