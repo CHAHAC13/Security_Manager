@@ -2,3 +2,11 @@ command:
   - "bash"
   - "-c"
   - "pip install -r backend/requirements.txt && cd frontend && npm install && npm run build && cd .. && uvicorn app:app --host 0.0.0.0 --port ${DATABRICKS_APP_PORT:-8000}"
+
+env:
+  # Resolved from the SQL warehouse app resource with key "sql-warehouse".
+  # Used by the backend to read catalog tags from system.information_schema.catalog_tags.
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse
+  - name: CATALOG_TAG_FILTER
+    value: "gpdip,gpdip_dev,gpdip_stg,gpdip_prod"

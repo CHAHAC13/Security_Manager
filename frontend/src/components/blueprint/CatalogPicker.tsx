@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, Search } from 'lucide-react';
 import type { CatalogOption } from '@/types/blueprint';
 import { cn } from '@/lib/utils';
@@ -33,6 +33,14 @@ export function CatalogPicker({
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const loadMoreRef = useRef<HTMLButtonElement>(null);
+  const setLoadMoreRef = useCallback((button: HTMLButtonElement | null) => {
+    if (!button && loadMoreRef.current === document.activeElement) {
+      searchRef.current?.focus();
+    }
+    loadMoreRef.current = button;
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -92,10 +100,11 @@ export function CatalogPicker({
           <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2">
             <Search className="h-4 w-4 shrink-0 text-slate-400" />
             <input
+              ref={searchRef}
               autoFocus
               type="search"
               aria-label="Search catalogs"
-              placeholder="Search catalogs…"
+              placeholder="Search catalog names…"
               maxLength={200}
               value={search}
               onChange={(event) => onSearchChange(event.target.value)}
@@ -141,11 +150,12 @@ export function CatalogPicker({
           {!loading && hasMore && (
             <div className="border-t border-slate-100 p-1">
               <button
+                ref={setLoadMoreRef}
                 type="button"
-                onClick={onLoadMore}
-                disabled={loadingMore}
+                onClick={() => { if (!loadingMore) onLoadMore(); }}
+                aria-disabled={loadingMore}
                 aria-live="polite"
-                className="w-full rounded px-3 py-2 text-left text-xs font-semibold text-sky-700 hover:bg-sky-50 focus-visible:outline-sky-500 disabled:text-slate-400"
+                className="w-full rounded px-3 py-2 text-left text-xs font-semibold text-sky-700 hover:bg-sky-50 focus-visible:outline-sky-500 aria-disabled:text-slate-400"
               >
                 {loadingMore ? 'Loading catalogs…' : 'Load more catalogs'}
               </button>

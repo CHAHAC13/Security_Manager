@@ -3,10 +3,11 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { CreateBlueprintPage } from './CreateBlueprintPage';
+import apiClient from '@/lib/apiClient';
 
 vi.mock('@/lib/apiClient', () => ({
   default: {
-    get: vi.fn(async (url: string, config: { params: { page: number; schema_names?: string } }) => {
+    get: vi.fn(async (url: string, config: { params: { page: number } }) => {
       const page = config.params.page;
       if (url.endsWith('/schemas')) {
         if (url.includes('/two_schema_catalog/')) {
@@ -22,12 +23,15 @@ vi.mock('@/lib/apiClient', () => ({
         } };
       }
       if (url.endsWith('/objects')) {
-        const schema = config.params.schema_names;
+        const path = url.match(/\/catalogs\/([^/]+)\/schemas\/([^/]+)\/objects$/);
+        if (!path) throw new Error('Unexpected objects URL');
+        const catalog = decodeURIComponent(path[1]);
+        const schema = decodeURIComponent(path[2]);
         const name = schema === 'clinical' ? 'patients' : 'deliveries';
         return { data: {
           items: [{
-            name, catalog_name: 'multi_schema_catalog', schema_name: schema,
-            full_name: `multi_schema_catalog.${schema}.${name}`,
+            name, catalog_name: catalog, schema_name: schema,
+            full_name: `${catalog}.${schema}.${name}`,
             object_type: 'TABLE', display_type: 'TABLE',
           }],
           pagination: { page, has_next: false, total_items: 1, total_pages: 1 },
@@ -41,6 +45,18 @@ vi.mock('@/lib/apiClient', () => ({
         pagination: { page, has_next: false, total_items: 2, total_pages: 1 },
       } };
     }),
+    post: vi.fn(async (_url: string, body: {
+      securables: { securable_type: string; full_name: string }[];
+    }) => ({
+      data: body.securables.map((item) => ({
+        ...item, principal: 'workspace-readers',
+        privileges: [{
+          privilege: item.securable_type === 'CATALOG' ? 'USE_CATALOG'
+            : item.securable_type === 'SCHEMA' ? 'USE_SCHEMA' : 'SELECT',
+          inherited: false,
+        }],
+      })),
+    })),
   },
 }));
 
@@ -57,11 +73,19 @@ describe('Objects to Permissions discovery integration', () => {
     expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'information_schema' }).checked).toBe(true);
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(await screen.findByRole('button', { name: 'Expand All' }));
-    const catalog = screen.getByRole('region', { name: 'Role assignment: dbx-dev-gpd-user-two-schema-catalog' });
-    expect(within(catalog).getByRole('checkbox', { name: 'cts_004: USE SCHEMA' })).toBeTruthy();
-    expect(within(catalog).getByRole('checkbox', { name: 'information_schema: USE SCHEMA' })).toBeTruthy();
-    expect(screen.getByRole('region', { name: 'Role assignment: dbx-dev-gpd-user-two-schema-catalog-cts-004' })).toBeTruthy();
-    expect(screen.getByRole('region', { name: 'Role assignment: dbx-dev-gpd-user-two-schema-catalog-information-schema' })).toBeTruthy();
+    const catalog = screen.getByRole('region', { name: 'Role assignment: workspace-readers' });
+    expect(within(catalog).getByRole<HTMLInputElement>('checkbox', { name: 'cts_004: USE_SCHEMA' }).checked).toBe(true);
+    expect(within(catalog).getByRole<HTMLInputElement>('checkbox', { name: 'information_schema: USE_SCHEMA' }).checked).toBe(true);
+    expect(screen.getAllByRole('region', { name: /^Role assignment:/ })).toHaveLength(1);
+    expect(apiClient.post).toHaveBeenLastCalledWith('/api/v1/discovery/privileges', {
+      securables: [
+        { securable_type: 'CATALOG', full_name: 'two_schema_catalog' },
+        { securable_type: 'SCHEMA', full_name: 'two_schema_catalog.cts_004' },
+        { securable_type: 'SCHEMA', full_name: 'two_schema_catalog.information_schema' },
+      ], include_inherited: true,
+    });
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    expect(await screen.findByText('Approvers — coming soon')).toBeTruthy();
   }, 15_000);
 
   it('retains schemas and objects across pages, focus changes and return navigation', async () => {
@@ -82,25 +106,45 @@ describe('Objects to Permissions discovery integration', () => {
     await user.click(screen.getAllByRole('button', { name: 'Next' })[1]);
 
     await user.click(await screen.findByRole('button', { name: 'Expand All' }));
-    const catalog = screen.getByRole('region', { name: 'Role assignment: dbx-dev-gpd-user-multi-schema-catalog' });
-    expect(within(catalog).getByRole('checkbox', { name: 'clinical: USE SCHEMA' })).toBeTruthy();
-    expect(within(catalog).getByRole('checkbox', { name: 'outbound: USE SCHEMA' })).toBeTruthy();
+    const catalog = screen.getByRole('region', { name: 'Role assignment: workspace-readers' });
+    expect(within(catalog).getByRole('checkbox', { name: 'clinical: USE_SCHEMA' })).toBeTruthy();
+    expect(within(catalog).getByRole('checkbox', { name: 'outbound: USE_SCHEMA' })).toBeTruthy();
     expect(within(catalog).getByRole('checkbox', { name: 'patients: SELECT' })).toBeTruthy();
     expect(within(catalog).getByRole('checkbox', { name: 'deliveries: SELECT' })).toBeTruthy();
     expect(within(catalog).queryByRole('checkbox', { name: 'multi_schema_catalog: SELECT' })).toBeNull();
-    const clinical = screen.getByRole('region', { name: 'Role assignment: dbx-dev-gpd-user-multi-schema-catalog-clinical' });
-    const outbound = screen.getByRole('region', { name: 'Role assignment: dbx-dev-gpd-user-multi-schema-catalog-outbound' });
-    expect(within(clinical).getByRole('checkbox', { name: 'patients: SELECT' })).toBeTruthy();
-    expect(within(clinical).queryByRole('checkbox', { name: 'deliveries: SELECT' })).toBeNull();
-    expect(within(outbound).getByRole('checkbox', { name: 'deliveries: SELECT' })).toBeTruthy();
-    expect(within(outbound).queryByRole('checkbox', { name: 'patients: SELECT' })).toBeNull();
+    expect(within(catalog).getByRole<HTMLInputElement>('checkbox', { name: 'patients: SELECT' }).checked).toBe(true);
+    expect(within(catalog).getByRole<HTMLInputElement>('checkbox', { name: 'deliveries: SELECT' }).checked).toBe(true);
+    await user.click(within(catalog).getByRole('checkbox', { name: 'patients: SELECT' }));
+    expect(within(catalog).getByText('+0 granted, -1 revoked')).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: 'Back' }));
     await user.click(await screen.findByRole('button', { name: 'outbound' }));
     expect((await screen.findByRole<HTMLInputElement>('checkbox', { name: /deliveries/ })).checked).toBe(true);
     await user.click(screen.getAllByRole('button', { name: 'Next' })[1]);
     await user.click(await screen.findByRole('button', { name: 'Expand All' }));
-    expect(within(screen.getByRole('region', { name: 'Role assignment: dbx-dev-gpd-user-multi-schema-catalog' }))
-      .getByRole('checkbox', { name: 'deliveries: SELECT' })).toBeTruthy();
+    const returned = screen.getByRole('region', { name: 'Role assignment: workspace-readers' });
+    expect(within(returned).getByRole<HTMLInputElement>('checkbox', { name: 'deliveries: SELECT' }).checked).toBe(true);
+    expect(within(returned).getByRole<HTMLInputElement>('checkbox', { name: 'patients: SELECT' }).checked).toBe(false);
   }, 15_000);
+
+  it('surfaces privileges API errors, blocks Next, and retries without demo grants', async () => {
+    vi.mocked(apiClient.post).mockRejectedValueOnce({
+      isAxiosError: true, response: {
+        status: 403, data: { detail: { message: 'No permission to inspect this catalog.' } },
+      },
+    });
+    const user = userEvent.setup();
+    render(<MemoryRouter><CreateBlueprintPage /></MemoryRouter>);
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Catalog selection: Select a catalog' }));
+    await user.click(await screen.findByRole('button', { name: 'two_schema_catalog' }));
+    await user.click(await screen.findByRole('checkbox', { name: 'cts_004' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringContaining('No permission to inspect this catalog.'));
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(true);
+    expect(screen.queryByRole('region', { name: /^Role assignment:/ })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('button', { name: 'Role assignment: workspace-readers' })).toBeTruthy();
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(false);
+  });
 });

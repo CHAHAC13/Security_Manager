@@ -1,6 +1,6 @@
 import type {
   BlueprintPermissionsData, PermissionEnvironment, PermissionMetadata, PermissionObject,
-  PermissionChange, RoleAssignment, RoleLevel, PermissionsErrors, RequestManagerValues,
+  PermissionChange, ObjectPermission, RoleAssignment, RoleLevel, PermissionsErrors, RequestManagerValues,
 } from '../types/blueprint';
 
 export function scopeOptions(level: RoleLevel, objects: PermissionObject[]) {
@@ -59,6 +59,7 @@ export function refreshRole(
   const next = { ...role, scopeObjectId, objectPermissions: scoped.map((object) => {
     const current = role.objectPermissions.find((permission) => permission.objectId === object.objectId);
     return {
+      ...current,
       objectId: object.objectId, objectName: object.objectName, objectType: object.objectType,
       originalPermissions: current?.originalPermissions ?? [],
       permissions: current?.permissions ?? [],
@@ -90,14 +91,26 @@ export function reconcilePermissions(
     .filter((role) => role.status === 'NEW' || (sameEnvironment && objects.some((object) => object.objectId === role.scopeObjectId)))
     .map((role) => {
       const discovered = existingRoles.find((item) => item.id === role.id);
-      const withNewObjects = discovered ? {
+      const withDiscovery = discovered ? {
         ...role,
-        objectPermissions: [
-          ...role.objectPermissions,
-          ...discovered.objectPermissions.filter((object) => !role.objectPermissions.some((current) => current.objectId === object.objectId)),
-        ],
+        objectPermissions: discovered.objectPermissions.map((latest) => {
+          const current = role.objectPermissions.find((item) => item.objectId === latest.objectId);
+          if (!current) return latest;
+          // Older wizard state used display labels instead of the API's privilege codes.
+          const key = (privilege: string) => latest.discoveredAssignments && !current.discoveredAssignments
+            ? privilege.replaceAll(' ', '_') : privilege;
+          const removed = new Set(current.originalPermissions.filter((privilege) =>
+            !current.permissions.includes(privilege)).map(key));
+          const added = current.permissions.filter((privilege) => !current.originalPermissions.includes(privilege)).map(key);
+          return {
+            ...latest,
+            permissions: [...new Set([
+              ...latest.originalPermissions.filter((privilege) => !removed.has(privilege)), ...added,
+            ])],
+          };
+        }),
       } : role;
-      return refreshRole(withNewObjects, objects, environment);
+      return refreshRole(withDiscovery, objects, environment);
     });
   for (const role of existingRoles) {
     if (!knownIds.has(role.id) && !roles.some((current) => current.id === role.id)) {
@@ -128,15 +141,12 @@ export function requestManagerChanges(role: RoleAssignment) {
   return (['enabled', 'formType', 'displayName'] as const).filter((key) => current[key] !== original[key]);
 }
 
-export function inheritedCatalogPermissions(role: RoleAssignment, object: PermissionObject, objects: PermissionObject[]) {
-  if (object.objectType === 'CATALOG') return [];
-  let parent = objects.find((item) => item.objectId === object.parentId);
-  const visited = new Set<string>();
-  while (parent && parent.objectType !== 'CATALOG' && !visited.has(parent.objectId)) {
-    visited.add(parent.objectId);
-    parent = objects.find((item) => item.objectId === parent?.parentId);
-  }
-  return role.objectPermissions.find((item) => item.objectId === parent?.objectId)?.permissions ?? [];
+export function allowedPermissionOptions(
+  object: Pick<ObjectPermission, 'objectType' | 'originalPermissions'>,
+  metadata: PermissionMetadata,
+) {
+  // A grant discovered on this exact role/resource is valid even if local options are incomplete.
+  return [...new Set([...metadata.permissionOptions[object.objectType], ...object.originalPermissions])];
 }
 
 export function validatePermissions(
@@ -149,7 +159,8 @@ export function validatePermissions(
     const fields: PermissionsErrors['roles'][string] = {};
     if (!['CATALOG', 'SCHEMA', 'OBJECT'].includes(role.level)) fields.level = 'Select a level.';
     if (!scopeOptions(role.level, objects).some((object) => object.objectId === role.scopeObjectId)) fields.scopeObjectId = 'Select a valid role scope.';
-    if (!metadata.roleTypes.some((type) => type.code === role.roleTypeCode)) fields.roleTypeCode = 'Select a role type.';
+    if ((role.status === 'NEW' || role.roleTypeCode)
+      && !metadata.roleTypes.some((type) => type.code === role.roleTypeCode)) fields.roleTypeCode = 'Select a role type.';
     if (!role.roleName.trim()) fields.roleName = 'Role name is required.';
     else if (role.status === 'NEW' && role.roleName.length > 32) fields.roleName = 'Role name must be 32 characters or fewer.';
     else if (role.status === 'NEW') {
@@ -165,7 +176,7 @@ export function validatePermissions(
     }
     const allowedIds = new Set(scopedObjects(role, objects).map((object) => object.objectId));
     if (role.objectPermissions.some((object) => !allowedIds.has(object.objectId)
-      || object.permissions.some((privilege) => !metadata.permissionOptions[object.objectType].includes(privilege)))) {
+      || object.permissions.some((privilege) => !allowedPermissionOptions(object, metadata).includes(privilege)))) {
       fields.objectPermissions = 'One or more privileges are not valid for the selected scope.';
     } else if (role.status === 'NEW'
       && !role.objectPermissions.some((object) => object.permissions.length)) {

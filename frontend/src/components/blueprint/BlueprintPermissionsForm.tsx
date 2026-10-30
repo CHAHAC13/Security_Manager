@@ -96,6 +96,11 @@ export function BlueprintPermissionsForm({ data, objectsData, environment, onCha
           <div>
             <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900"><ShieldCheck className="h-4 w-4 text-sky-600" />Permissions</h2>
             <p className="mt-1 text-sm text-slate-500">Configure roles and permissions for the objects selected in the previous step.</p>
+            {service === permissionsService && <p className="mt-2 text-xs text-slate-500">
+              Direct and inherited permissions are loaded from the API without changing grants. Inherited access is read-only.
+              Only your explicit edits create pending changes. Changes stay in this wizard; role-name validation,
+              draft saving and applying grants are not connected yet. Role types and Request Manager settings are not returned by discovery.
+            </p>}
           </div>
           {ready && <Button type="button" onClick={() => { setCreationScope(null); setCreating(true); }}>+ Create Role Assignment</Button>}
         </div>

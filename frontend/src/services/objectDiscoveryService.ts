@@ -138,7 +138,7 @@ export const apiObjectDiscoveryService: ObjectDiscoveryService = {
     return withApiErrors(async () => {
       const { data } = await apiClient.get<ApiPage<ApiCatalog>>(
         '/api/v1/discovery/catalogs',
-        { params: apiPageParams(request), signal: request.signal },
+        { params: { ...apiPageParams(request), search_by: 'name' }, signal: request.signal },
       );
       return apiPage(data, (item) => ({
         id: item.name,
@@ -168,11 +168,10 @@ export const apiObjectDiscoveryService: ObjectDiscoveryService = {
           ? 'VIEW'
           : 'ALL';
       const { data } = await apiClient.get<ApiPage<ApiObject>>(
-        `/api/v1/discovery/catalogs/${encodeURIComponent(catalogName)}/objects`,
+        `/api/v1/discovery/catalogs/${encodeURIComponent(catalogName)}/schemas/${encodeURIComponent(schemaName)}/objects`,
         {
           params: {
             ...apiPageParams(request),
-            schema_names: schemaName,
             object_type: objectType,
           },
           signal: request.signal,

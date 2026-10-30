@@ -64,6 +64,7 @@ describe('role assignment cards', () => {
     await addRole();
     const created = screen.getByRole('textbox', { name: 'Role Name *' });
     expect(created).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: 'Role Type *' })).toBeTruthy();
     expect(existing.getAttribute('aria-expanded')).toBe('false');
     await userEvent.click(screen.getByRole('button', { name: 'Expand All' }));
     expect(screen.getAllByRole('button', { name: /^Role assignment:/ }).every((button) => button.getAttribute('aria-expanded') === 'true')).toBe(true);
@@ -96,7 +97,7 @@ describe('role assignment cards', () => {
     expect(first.objectPermissions.find((item) => item.objectId === 's1')?.permissions).toEqual(['CREATE TABLE']);
     expect(first.objectPermissions.find((item) => item.objectId === 't1')?.permissions).toEqual([]);
     expect(second.objectPermissions.every((item) => item.permissions.length === 0)).toBe(true);
-    expect(screen.getByText('Added')).toBeTruthy();
+    expect(screen.getByText('Pending addition')).toBeTruthy();
     expect(screen.getByText('+1 granted, -0 revoked')).toBeTruthy();
     await userEvent.click(screen.getAllByRole('checkbox', { name: 'cdm: CREATE TABLE' })[0]);
     expect(screen.queryByText(/granted, .*revoked/)).toBeNull();
@@ -130,11 +131,12 @@ describe('role assignment cards', () => {
     expect(screen.queryByRole('checkbox', { name: 'contacts: SELECT' })).toBeNull();
   });
 
-  it('shows catalog inheritance without copying child grants', async () => {
+  it('does not infer inherited child permissions from edited catalog grants', async () => {
     const editor = renderEditor();
     await addRole();
     await userEvent.click(screen.getByRole('checkbox', { name: 'odx: USE CATALOG' }));
-    expect(screen.getAllByText(/Inherited from catalog: USE CATALOG/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Inherited from catalog:/)).toBeNull();
+    expect(screen.queryByRole('region', { name: /^Inherited permissions for/ })).toBeNull();
     expect(editor.data().roleAssignments[0].objectPermissions.find((item) => item.objectId === 's1')?.permissions).toEqual([]);
   });
 
@@ -149,7 +151,7 @@ describe('role assignment cards', () => {
     expect(screen.queryByText(/\/32/)).toBeNull();
     expect(screen.getByText('Catalog · User')).toBeTruthy();
     await userEvent.click(screen.getByRole('checkbox', { name: 'study: SELECT' }));
-    expect(screen.getByText('Removed')).toBeTruthy();
+    expect(screen.getByText('Pending removal')).toBeTruthy();
     expect(screen.getByText('+0 granted, -1 revoked')).toBeTruthy();
     expect(editor.data().roleAssignments[0].objectPermissions.find((item) => item.objectId === 't1')?.originalPermissions).toEqual(['SELECT']);
     const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
@@ -252,15 +254,35 @@ describe('role assignment cards', () => {
     expect(editor.data().roleAssignments[0].objectPermissions.find((object) => object.objectId === 'sys-table')?.permissions).toEqual(['SELECT']);
   });
 
-  it('shows unsupported original privileges inline so they can be explicitly removed', async () => {
+  it('preserves discovered privileges outside local options and permits undoing pending removals', async () => {
     const roles = await createMockPermissionsService().getExistingRolesForObjects(objects, 'dev');
     const role = roles[0];
-    role.objectPermissions[0] = { ...role.objectPermissions[0], originalPermissions: ['LEGACY'], permissions: ['LEGACY'] };
-    renderEditor({ getExistingRolesForObjects: async () => [role] });
+    const originals = ['EXECUTE', 'READ VOLUME', 'SELECT', 'USE SCHEMA'];
+    role.objectPermissions[0] = { ...role.objectPermissions[0], originalPermissions: [...originals], permissions: [...originals] };
+    const editor = renderEditor({ getExistingRolesForObjects: async () => [role] });
     await userEvent.click(await screen.findByRole('button', { name: `Role assignment: ${role.roleName}` }));
-    await userEvent.click(screen.getByRole('checkbox', { name: 'odx: LEGACY' }));
-    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'odx: LEGACY' }).disabled).toBe(true);
-    expect(screen.getByText('Removed')).toBeTruthy();
+    for (const privilege of originals) {
+      expect(screen.getByRole<HTMLInputElement>('checkbox', { name: `odx: ${privilege}` }).checked).toBe(true);
+    }
+    expect(screen.queryByText(/Unsupported/)).toBeNull();
+    expect(screen.queryByText('Pending removal')).toBeNull();
+    expect(screen.queryByText('Removed')).toBeNull();
+    await act(async () => { expect(await editor.ref.current?.validate()).toBe(true); });
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'odx: READ VOLUME' }));
+    expect(screen.getByText('Pending removal')).toBeTruthy();
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'odx: READ VOLUME' }).disabled).toBe(false);
+    await userEvent.click(screen.getByRole('checkbox', { name: 'odx: READ VOLUME' }));
+    expect(screen.queryByText('Pending removal')).toBeNull();
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'odx: SELECT' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'odx: USE SCHEMA' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Restore original permissions for odx' }));
+    expect(screen.queryByText('Pending removal')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Restore original permissions for odx' })).toBeNull();
+    expect(editor.data().roleAssignments[0].objectPermissions[0].permissions).toEqual(originals);
+    expect(editor.data().roleAssignments[0].objectPermissions[0].originalPermissions).toEqual(originals);
+    await act(async () => { expect(await editor.ref.current?.validate()).toBe(true); });
   });
 
   it('shows empty and load/retry states', async () => {

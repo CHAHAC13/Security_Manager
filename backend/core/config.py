@@ -34,6 +34,16 @@ class Settings(BaseSettings):
     discovery_max_schema_requests: int = Field(
         default=5, ge=1, le=25, alias="DISCOVERY_MAX_SCHEMA_REQUESTS"
     )
+    # SQL warehouse used to read catalog tags from system.information_schema.catalog_tags.
+    databricks_warehouse_id: str | None = Field(
+        default=None, alias="DATABRICKS_WAREHOUSE_ID"
+    )
+    # Comma-separated Unity Catalog tag names. Only catalogs carrying at least one
+    # of these tags are returned by the discovery API. Leave empty to return all.
+    catalog_tag_filter: str = Field(
+        default="gpdip,gpdip_dev,gpdip_stg,gpdip_prod",
+        alias="CATALOG_TAG_FILTER",
+    )
 
     @field_validator("databricks_host")
     @classmethod
@@ -53,6 +63,12 @@ class Settings(BaseSettings):
     @property
     def normalized_databricks_host(self) -> str:
         return self.databricks_host.rstrip("/")
+
+    @property
+    def catalog_tag_names(self) -> list[str]:
+        return sorted(
+            {item.strip() for item in self.catalog_tag_filter.split(",") if item.strip()}
+        )
 
     @property
     def cors_origins(self) -> list[str]:
