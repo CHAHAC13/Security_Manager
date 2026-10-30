@@ -229,7 +229,7 @@ class DatabricksUnityCatalogClient:
         return await self._get_all_pages(
             "/api/2.1/unity-catalog/schemas",
             "schemas",
-            {"catalog_name": catalog_name},
+            {"catalog_name": catalog_name, "include_browse": "true"},
         )
 
     async def list_tables_and_views(
@@ -238,7 +238,11 @@ class DatabricksUnityCatalogClient:
         return await self._get_all_pages(
             "/api/2.1/unity-catalog/tables",
             "tables",
-            {"catalog_name": catalog_name, "schema_name": schema_name},
+            {
+                "catalog_name": catalog_name,
+                "schema_name": schema_name,
+                "include_browse": "true",
+            },
         )
 
     async def get_privilege_assignments(
