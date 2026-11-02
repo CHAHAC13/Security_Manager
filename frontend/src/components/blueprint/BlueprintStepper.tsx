@@ -10,7 +10,7 @@ interface BlueprintStepperProps {
 }
 
 /**
- * Horizontal stepper bar shared across all 5 blueprint wizard steps.
+ * Horizontal stepper bar shared across all blueprint wizard steps.
  * Highlights the active step, marks completed steps with a check icon,
  * and dims future steps.
  */

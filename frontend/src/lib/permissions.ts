@@ -141,6 +141,11 @@ export function requestManagerChanges(role: RoleAssignment) {
   return (['enabled', 'formType', 'displayName'] as const).filter((key) => current[key] !== original[key]);
 }
 
+export function rolesRequiringApproval(roles: RoleAssignment[]): RoleAssignment[] {
+  return roles.filter((role) => role.status === 'NEW'
+    || permissionChanges(role).length > 0 || requestManagerChanges(role).length > 0);
+}
+
 export function allowedPermissionOptions(
   object: Pick<ObjectPermission, 'objectType' | 'originalPermissions'>,
   metadata: PermissionMetadata,

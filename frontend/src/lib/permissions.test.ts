@@ -7,12 +7,27 @@ import { objects, objectsData } from '@/test/permissionFixtures';
 import {
   activeRequestManager, createRole, generateRoleName,
   permissionChanges, reconcilePermissions, refreshRole, requestManagerChanges,
-  scopeOptions, scopedObjects, validatePermissions,
+  rolesRequiringApproval, scopeOptions, scopedObjects, validatePermissions,
 } from './permissions';
 
 const newRole = () => createRole('r1', objects, 'dev', 'user');
 const config = (role = newRole()): BlueprintPermissionsData => ({ roleAssignments: [role], discoveredRoleIds: [] });
 const validate = (data: BlueprintPermissionsData) => validatePermissions(data, 'dev', objects, MOCK_PERMISSION_METADATA);
+
+describe('approval change scope', () => {
+  it('includes new roles, grants, revokes and active Request Manager changes only', () => {
+    const original = { ...newRole(), status: 'EXISTING' as const, mode: 'UPDATE_EXISTING' as const };
+    original.objectPermissions[0] = { ...original.objectPermissions[0], originalPermissions: ['USE_CATALOG'], permissions: ['USE_CATALOG'] };
+    const grant = { ...original, id: 'grant', objectPermissions: original.objectPermissions.map((object) => ({ ...object, permissions: [...object.permissions, 'SELECT'] })) };
+    const revoke = { ...original, id: 'revoke', objectPermissions: original.objectPermissions.map((object) => ({ ...object, permissions: [] })) };
+    const rm = { ...original, id: 'rm', requestManager: { ...original.requestManager, enabled: true, formType: 'regular', displayName: 'Users' } };
+    const inactiveRm = { ...original, id: 'inactive', requestManager: { ...original.requestManager, formType: 'regular', displayName: 'Ignored' } };
+    expect(rolesRequiringApproval([original, newRole(), grant, revoke, rm, inactiveRm]).map((role) => role.id))
+      .toEqual(['r1', 'grant', 'revoke', 'rm']);
+    expect(rolesRequiringApproval([original])).toEqual([]);
+    expect(rolesRequiringApproval([])).toEqual([]);
+  });
+});
 
 describe('role names and scopes', () => {
   it.each([

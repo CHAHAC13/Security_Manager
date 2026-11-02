@@ -13,10 +13,12 @@ interface BlueprintFooterProps {
   saving?: boolean;
   nextDisabled?: boolean;
   saveDisabled?: boolean;
+  /** Overrides the default "Next" label. */
+  nextLabel?: string;
 }
 
 /**
- * Persistent footer navigation shared across all 5 blueprint wizard steps.
+ * Persistent footer navigation shared across all blueprint wizard steps.
  * Renders Back (disabled on step 1), Cancel, Save Draft, and Next/Submit buttons.
  */
 export function BlueprintFooter({
@@ -29,6 +31,7 @@ export function BlueprintFooter({
   saving = false,
   nextDisabled = false,
   saveDisabled = false,
+  nextLabel,
 }: BlueprintFooterProps) {
   const isFirstStep = currentStep === 1;
   const isLastStep = currentStep === BLUEPRINT_STEPS.length;
@@ -55,7 +58,7 @@ export function BlueprintFooter({
           {saving ? 'Saving...' : 'Save Draft'}
         </Button>
         <Button variant="primary" onClick={onNext} disabled={busy || nextDisabled}>
-          <span>{isLastStep ? 'Submit' : 'Next'}</span>
+          <span>{isLastStep ? 'Submit' : nextLabel ?? 'Next'}</span>
           {!isLastStep && <ArrowRight className="w-3.5 h-3.5 ml-1.5" />}
         </Button>
       </div>
