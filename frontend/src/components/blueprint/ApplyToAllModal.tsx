@@ -3,11 +3,11 @@ import { AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ApproverCell } from './ApproverCell';
 import {
-  APPROVER_TYPES, APPROVER_TYPE_LABELS, DEFAULT_APPROVER_RULES, addApprover, emptyRoleApprovers, removeApprover, rolesLosingApprovers,
+  APPROVER_TYPES, APPROVER_TYPE_LABELS, DEFAULT_APPROVER_RULES, addApprover, emptyRoleApprovers, removeApprover, rolesLosingApprovers, validateRoleApprovers,
   type ApplyToAllOptions, type ApproverRules,
 } from '@/lib/approvers';
 import type { ApproverService } from '@/services/approverService';
-import type { BlueprintApproversData, RoleApprovers } from '@/types/blueprint';
+import type { ApproverType, BlueprintApproversData, RoleApprovers } from '@/types/blueprint';
 
 interface Props {
   data: BlueprintApproversData;
@@ -17,10 +17,11 @@ interface Props {
   onClose: () => void;
   /** Pre-selected approvers, e.g. from a row's "Copy to all". */
   initial?: RoleApprovers;
+  type?: ApproverType;
   rules?: ApproverRules;
 }
 
-export function ApplyToAllModal({ data, roleIds, service, onApply, onClose, initial, rules = DEFAULT_APPROVER_RULES }: Props) {
+export function ApplyToAllModal({ data, roleIds, service, onApply, onClose, initial, type, rules = DEFAULT_APPROVER_RULES }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [selection, setSelection] = useState<RoleApprovers>(() => structuredClone(initial ?? emptyRoleApprovers()));
   const [mode, setMode] = useState<ApplyToAllOptions['mode']>('add');
@@ -28,8 +29,13 @@ export function ApplyToAllModal({ data, roleIds, service, onApply, onClose, init
   const [confirming, setConfirming] = useState(false);
   useEffect(() => { dialog.current?.showModal(); }, []);
 
-  const options: ApplyToAllOptions = { ...selection, mode, onlyMissing };
-  const empty = !selection.technical.length && !selection.business.length;
+  const options: ApplyToAllOptions = {
+    technical: type === 'business' ? [] : selection.technical,
+    business: type === 'technical' ? [] : selection.business,
+    mode, onlyMissing,
+  };
+  const empty = !options.technical.length && !options.business.length;
+  const technicalError = options.technical.length ? validateRoleApprovers(options, rules).errors.technical : undefined;
 
   function update(next: RoleApprovers) {
     setSelection(next);
@@ -37,7 +43,7 @@ export function ApplyToAllModal({ data, roleIds, service, onApply, onClose, init
   }
 
   function submit() {
-    if (empty) return;
+    if (empty || technicalError) return;
     if (mode === 'replace' && !confirming) {
       const affected = rolesLosingApprovers(data, roleIds, options, rules);
       if (affected.length) { setConfirming(true); return; }
@@ -51,13 +57,17 @@ export function ApplyToAllModal({ data, roleIds, service, onApply, onClose, init
     <dialog ref={dialog} onCancel={onClose} aria-labelledby="apply-all-heading"
       className="w-full max-w-xl space-y-5 overflow-visible rounded-xl border border-slate-200 p-6 shadow-xl backdrop:bg-slate-900/40">
       <div>
-        <h3 id="apply-all-heading" className="text-base font-semibold text-slate-900">Apply Approvers to All Roles</h3>
+        <h3 id="apply-all-heading" className="text-base font-semibold text-slate-900">
+          {type ? `Apply ${APPROVER_TYPE_LABELS[type]}s to All Roles` : 'Apply Approvers to All Roles'}
+        </h3>
         <p className="mt-1 text-xs text-slate-500">Selected approvers are applied to {roleIds.length} {roleIds.length === 1 ? 'role' : 'roles'} in this blueprint.</p>
+        {type && <p className="mt-1 text-xs text-slate-500">Other owner assignments will not change.</p>}
       </div>
-      {APPROVER_TYPES.map((type) => (
+      {(type ? [type] : APPROVER_TYPES).map((type) => (
         <div key={type}>
           <p className="mb-1 text-xs font-semibold text-slate-600">{APPROVER_TYPE_LABELS[type]}</p>
           <ApproverCell contextLabel="all roles" type={type} approvers={selection[type]} service={service} rules={rules}
+            error={type === 'technical' ? technicalError : undefined}
             onAdd={(approver) => { const outcome = addApprover(selection, type, approver, rules); if (outcome.added) update(outcome.entry); }}
             onRemove={(id) => update(removeApprover(selection, type, id))} />
         </div>
@@ -87,7 +97,7 @@ export function ApplyToAllModal({ data, roleIds, service, onApply, onClose, init
       )}
       <div className="flex justify-end gap-3">
         <Button type="button" onClick={onClose}>Cancel</Button>
-        <Button type="button" variant="primary" disabled={empty} onClick={submit}>
+        <Button type="button" variant="primary" disabled={empty || Boolean(technicalError)} onClick={submit}>
           {confirming ? 'Confirm replace' : 'Apply'}
         </Button>
       </div>

@@ -18,7 +18,7 @@ interface BlueprintFooterProps {
 }
 
 /**
- * Persistent footer navigation shared across all 5 blueprint wizard steps.
+ * Persistent footer navigation shared across all blueprint wizard steps.
  * Renders Back (disabled on step 1), Cancel, Save Draft, and Next/Submit buttons.
  */
 export function BlueprintFooter({

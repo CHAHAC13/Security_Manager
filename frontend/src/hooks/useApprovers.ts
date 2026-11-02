@@ -33,7 +33,7 @@ export function useApprovers(
         const pending = roles.filter((role) => role.status === 'EXISTING' && !data.prefilledRoleIds.includes(role.id));
         const [scopeObjects, fetched] = await Promise.all([
           // Scope labels are informational; a failure here must not block approver assignment.
-          loadScopeObjects().catch(() => [] as PermissionObject[]),
+          roles.length ? loadScopeObjects().catch(() => [] as PermissionObject[]) : Promise.resolve([]),
           pending.length
             ? service.getRoleApprovers({ blueprintId, roles: pending.map((role) => ({ roleId: role.id, roleName: role.roleName })) })
             : Promise.resolve({}),

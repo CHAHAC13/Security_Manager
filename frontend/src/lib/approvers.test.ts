@@ -5,11 +5,11 @@ import {
   type ApplyToAllOptions, type ApproverRole, type ApproverRules,
 } from './approvers';
 import { objects } from '@/test/permissionFixtures';
+import { TECHNICAL_OWNERS } from '@/config/approverConfig';
 import type { Approver, BlueprintApproversData } from '@/types/blueprint';
 
 const person = (id: string): Approver => ({ id, displayName: `User ${id}`, email: `${id}@example.com` });
-const a = person('a');
-const b = person('b');
+const [a, b] = TECHNICAL_OWNERS;
 const c = person('c');
 const rules: ApproverRules = { maxPerType: 2, allowSamePersonBothTypes: true };
 const roles: ApproverRole[] = [
@@ -46,7 +46,7 @@ describe('approver validation', () => {
   it('warns (but stays complete) when the same person is in both columns, or errors when disallowed', () => {
     const allowed = validateRoleApprovers({ technical: [a], business: [a] }, rules);
     expect(allowed.complete).toBe(true);
-    expect(allowed.warnings).toEqual(['User a is assigned as both Technical/System Owner and Domain/Business Owner']);
+    expect(allowed.warnings).toEqual(['Jisun Yoon is assigned as both Technical/System Owner and Domain/Business Owner']);
     const blocked = validateRoleApprovers({ technical: [a], business: [a] }, { ...rules, allowSamePersonBothTypes: false });
     expect(blocked.complete).toBe(false);
     expect(blocked.errors.business).toMatch(/assigned as both/);
@@ -63,9 +63,25 @@ describe('approver validation', () => {
   it('prevents duplicates and enforces the maximum when adding', () => {
     const entry = { technical: [a], business: [] };
     expect(addApprover(entry, 'technical', a, rules)).toEqual({ added: false, entry, reason: 'duplicate' });
-    const full = { technical: [a, b], business: [] };
-    expect(addApprover(full, 'technical', c, rules)).toEqual({ added: false, entry: full, reason: 'max' });
+    const full = { technical: [a], business: [a, b] };
+    expect(addApprover(full, 'business', c, rules)).toEqual({ added: false, entry: full, reason: 'max' });
     expect(addApprover(entry, 'business', a, rules)).toEqual({ added: true, entry: { technical: [a], business: [a] } });
+  });
+
+  it('rejects unsupported technical owners from API or draft state', () => {
+    const entry = { technical: [], business: [b] };
+    expect(addApprover(entry, 'technical', c, rules)).toEqual({ added: false, entry, reason: 'invalid-technical-owner' });
+    expect(validateRoleApprovers({ technical: [c], business: [b] }).errors.technical).toMatch(/Select only/);
+    expect(isRoleComplete({ technical: [c], business: [b] })).toBe(false);
+    expect(() => applyToAll(data(), ['r1'], options({ technical: [c] }))).toThrow(/Select only/);
+  });
+
+  it('matches technical owners by case-insensitive email despite API-specific IDs', () => {
+    const apiOwner = { ...a, id: 'api-user-id', email: a.email.toUpperCase() };
+    const entry = { technical: [apiOwner], business: [b] };
+    expect(isRoleComplete(entry)).toBe(true);
+    expect(addApprover(entry, 'technical', a).added).toBe(false);
+    expect(applyToAll(data({ r1: entry }), ['r1'], options({ technical: [a] })).data.approvers.r1.technical).toEqual([apiOwner]);
   });
 });
 
@@ -82,36 +98,36 @@ describe('apply to all', () => {
   });
 
   it('replaces existing approvers only for the selected types', () => {
-    const { data: next } = applyToAll(initial, ids, options({ technical: [c], mode: 'replace' }), rules);
-    expect(next.approvers.r1).toEqual({ technical: [c], business: [] });
-    expect(next.approvers.r2).toEqual({ technical: [c], business: [c] });
-    expect(next.approvers.r3).toEqual({ technical: [c], business: [] });
+    const { data: next } = applyToAll(initial, ids, options({ technical: [a], mode: 'replace' }), rules);
+    expect(next.approvers.r1).toEqual({ technical: [a], business: [] });
+    expect(next.approvers.r2).toEqual({ technical: [a], business: [c] });
+    expect(next.approvers.r3).toEqual({ technical: [a], business: [] });
   });
 
   it('only fills empty columns when "only roles missing approvers" is set', () => {
-    const { data: next, updatedRoleIds } = applyToAll(initial, ids, options({ technical: [c], business: [a], onlyMissing: true, mode: 'replace' }), rules);
+    const { data: next, updatedRoleIds } = applyToAll(initial, ids, options({ technical: [b], business: [a], onlyMissing: true, mode: 'replace' }), rules);
     expect(next.approvers.r1).toEqual({ technical: [a], business: [a] });
     expect(next.approvers.r2).toEqual({ technical: [b], business: [c] });
-    expect(next.approvers.r3).toEqual({ technical: [c], business: [a] });
+    expect(next.approvers.r3).toEqual({ technical: [b], business: [a] });
     expect(updatedRoleIds).toEqual(['r1', 'r3']);
   });
 
   it('caps additions at the maximum per type while keeping existing approvers', () => {
     const value = data({ r1: { technical: [a, b], business: [] } });
-    const { data: next, updatedRoleIds } = applyToAll(value, ['r1'], options({ technical: [c] }), rules);
+    const { data: next, updatedRoleIds } = applyToAll(value, ['r1'], options({ technical: [b] }), { ...rules, maxPerType: 1 });
     expect(next.approvers.r1.technical).toEqual([a, b]);
     expect(updatedRoleIds).toEqual([]);
   });
 
   it('reports only roles that would lose approvers so the UI can confirm', () => {
-    expect(rolesLosingApprovers(initial, ids, options({ technical: [c], mode: 'replace' }), rules)).toEqual(['r1', 'r2']);
-    expect(rolesLosingApprovers(initial, ids, options({ technical: [c] }), rules)).toEqual([]);
-    expect(rolesLosingApprovers(initial, ids, options({ technical: [c], mode: 'replace', onlyMissing: true }), rules)).toEqual([]);
+    expect(rolesLosingApprovers(initial, ids, options({ technical: [a], mode: 'replace' }), rules)).toEqual(['r2']);
+    expect(rolesLosingApprovers(initial, ids, options({ technical: [a] }), rules)).toEqual([]);
+    expect(rolesLosingApprovers(initial, ids, options({ technical: [a], mode: 'replace', onlyMissing: true }), rules)).toEqual([]);
   });
 
   it('does not mutate the input state', () => {
     const snapshot = structuredClone(initial);
-    applyToAll(initial, ids, options({ technical: [c], mode: 'replace' }), rules);
+    applyToAll(initial, ids, options({ technical: [b], mode: 'replace' }), rules);
     expect(initial).toEqual(snapshot);
   });
 });
@@ -125,10 +141,19 @@ describe('approver state helpers', () => {
   });
 
   it('prefills fetched approvers without overwriting user entries and remembers fetched roles', () => {
-    const value = data({ r1: { technical: [c], business: [] } });
+    const value = data({ r1: { technical: [b], business: [] } });
     const next = mergePrefilledApprovers(value, { r1: { technical: [a], business: [b] }, r2: { technical: [a], business: [b] } }, ['r1', 'r2']);
-    expect(next.approvers).toEqual({ r1: { technical: [c], business: [b] }, r2: { technical: [a], business: [b] } });
+    expect(next.approvers).toEqual({ r1: { technical: [b], business: [b] }, r2: { technical: [a], business: [b] } });
     expect(next.prefilledRoleIds).toEqual(['r1', 'r2']);
+  });
+
+  it('removes obsolete technical owners from retained drafts and fetched prefill without changing business owners', () => {
+    const value = data({ r1: { technical: [a, c], business: [c] } });
+    const cleaned = reconcileApprovers(value, ['r1']);
+    expect(cleaned.approvers.r1).toEqual({ technical: [a], business: [c] });
+    expect(value.approvers.r1.technical).toEqual([a, c]);
+    expect(mergePrefilledApprovers(data(), { r1: { technical: [c, b], business: [c] } }, ['r1']).approvers.r1)
+      .toEqual({ technical: [b], business: [c] });
   });
 
   it('filters roles by name, status and missing approvers', () => {

@@ -6,14 +6,17 @@ import { BlueprintSetupForm } from '@/components/blueprint/BlueprintSetupForm';
 import { BlueprintObjectsForm } from '@/components/blueprint/BlueprintObjectsForm';
 import { BlueprintPermissionsForm, type PermissionsFormHandle } from '@/components/blueprint/BlueprintPermissionsForm';
 import { BlueprintApproversForm } from '@/components/blueprint/BlueprintApproversForm';
+import { BlueprintDeploymentForm, type DeploymentFormHandle } from '@/components/blueprint/BlueprintDeploymentForm';
+import { DeploymentSummary } from '@/components/blueprint/DeploymentSummary';
 import { Toast } from '@/components/ui/Toast';
 import { permissionsService, PermissionsValidationError, type PermissionsService } from '@/services/permissionsService';
 import { approverService as defaultApproverService, type ApproverService } from '@/services/approverService';
-import { reconcilePermissions } from '@/lib/permissions';
+import { reconcilePermissions, rolesRequiringApproval } from '@/lib/permissions';
 import { reconcileApprovers } from '@/lib/approvers';
-import { INITIAL_SETUP_DATA, INITIAL_OBJECTS_DATA, INITIAL_PERMISSIONS_DATA, INITIAL_APPROVERS_DATA } from '@/types/blueprint';
+import { createDeploymentData } from '@/lib/deployment';
+import { BLUEPRINT_STEPS, INITIAL_SETUP_DATA, INITIAL_OBJECTS_DATA, INITIAL_PERMISSIONS_DATA, INITIAL_APPROVERS_DATA } from '@/types/blueprint';
 import type {
-  BlueprintStep, BlueprintSetupData, BlueprintObjectsData, BlueprintPermissionsData, BlueprintApproversData,
+  BlueprintStep, BlueprintSetupData, BlueprintObjectsData, BlueprintPermissionsData, BlueprintApproversData, BlueprintDeploymentData,
 } from '@/types/blueprint';
 
 /** Step subtitle descriptions shown in the page header. */
@@ -22,7 +25,8 @@ const STEP_DESCRIPTIONS: Record<BlueprintStep, string> = {
   2: 'Select the Databricks objects to include in this blueprint.',
   3: 'Configure roles and permissions for the objects selected in the previous step.',
   4: 'Assign technical and business approvers.',
-  5: 'Review the complete blueprint before submission.',
+  5: 'Set the deployment schedule for Dev, Stg and Prd environments.',
+  6: 'Review the complete blueprint before submission.',
 };
 
 const STEP_LABELS: Record<BlueprintStep, string> = {
@@ -30,12 +34,13 @@ const STEP_LABELS: Record<BlueprintStep, string> = {
   2: 'Objects',
   3: 'Permissions',
   4: 'Approvers',
-  5: 'Review',
+  5: 'Deployment',
+  6: 'Review & Submit',
 };
 
 /**
  * Create Blueprint wizard page.
- * Orchestrates the 5-step flow: Setup → Objects → Permissions → Approvers → Review.
+ * Orchestrates Setup → Objects → Permissions → Approvers → Deployment → Review & Submit.
  * The stepper and footer are shared across all steps; only the center content swaps.
  */
 export function CreateBlueprintPage({ service = permissionsService, approverService = defaultApproverService }: {
@@ -74,11 +79,17 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
     setDraftFeedback(null);
   }, []);
 
-  // TODO: add state for step 5 as it is implemented
+  const [deploymentData, setDeploymentData] = useState<BlueprintDeploymentData>(createDeploymentData);
+  const deploymentRef = useRef<DeploymentFormHandle>(null);
+  const handleDeploymentChange = useCallback((value: BlueprintDeploymentData) => {
+    setDeploymentData(value);
+    setDraftFeedback(null);
+  }, []);
 
   const handleNext = useCallback(async () => {
     if (actionInProgress.current) return;
     if (currentStep === 4 && !approversReady) return;
+    if (currentStep === 5 && !deploymentRef.current?.validate()) return;
     if (currentStep === 3) {
       if (!permissionsReady) return;
       actionInProgress.current = true;
@@ -90,13 +101,13 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
         setWorking(false);
       }
     }
-    if (currentStep < 5) {
+    if (currentStep < BLUEPRINT_STEPS.length) {
       setCurrentStep((prev) => (prev + 1) as BlueprintStep);
     } else {
       // Final submit — will call backend once available
-      console.log('Blueprint submitted:', { setupData, objectsData, permissionsData, approversData });
+      console.log('Blueprint submitted:', { setupData, objectsData, permissionsData, approversData, deploymentData });
     }
-  }, [currentStep, setupData, objectsData, permissionsData, approversData, permissionsReady, approversReady]);
+  }, [currentStep, setupData, objectsData, permissionsData, approversData, deploymentData, permissionsReady, approversReady]);
 
   const handleBack = useCallback(() => {
     if (currentStep > 1) {
@@ -122,11 +133,12 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
         permissions = reconcilePermissions(permissionsData, selected, discovered, setupData.environment);
         setPermissionsData(permissions);
       }
-      const approvers = reconcileApprovers(approversData, permissions.roleAssignments.map((role) => role.id));
+      const approvers = reconcileApprovers(approversData, rolesRequiringApproval(permissions.roleAssignments).map((role) => role.id));
       if (approvers !== approversData) setApproversData(approvers);
-      await service.savePermissionsDraft({ setup: setupData, objects: objectsData, permissions, approvers });
-      // Approvers draft is always allowed (no validation); skip the call when nothing was assigned yet.
-      const saveApprovers = currentStep === 4 || Object.keys(approvers.approvers).length > 0;
+      await service.savePermissionsDraft({ setup: setupData, objects: objectsData, permissions, approvers, deployment: deploymentData });
+      // Also clear previously assigned owners when all permission changes have been reverted.
+      const saveApprovers = currentStep >= 4 || Object.keys(approvers.approvers).length > 0
+        || Object.keys(approversData.approvers).length > 0;
       if (saveApprovers) await approverService.saveApproversDraft(draftBlueprintId, approvers.approvers);
       setDraftFeedback({
         error: false,
@@ -141,7 +153,7 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
       actionInProgress.current = false;
       setSaving(false);
     }
-  }, [setupData, objectsData, permissionsData, approversData, service, approverService, draftBlueprintId, currentStep]);
+  }, [setupData, objectsData, permissionsData, approversData, deploymentData, service, approverService, draftBlueprintId, currentStep]);
   const dismissDraftFeedback = useCallback(() => setDraftFeedback(null), []);
 
   return (
@@ -150,10 +162,10 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-6 border-b border-slate-200">
         <div>
           <h1 className="text-xl font-bold text-slate-900 tracking-tight">
-            Create Security Blueprint
+            {currentStep === 5 ? 'Deployment Strategy' : 'Create Security Blueprint'}
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Step {currentStep} of 5 &mdash; {STEP_LABELS[currentStep]}.{' '}
+            Step {currentStep} of {BLUEPRINT_STEPS.length}{currentStep === 5 ? ': ' : ' — '}{STEP_LABELS[currentStep]}.{' '}
             {STEP_DESCRIPTIONS[currentStep]}
           </p>
         </div>
@@ -197,7 +209,14 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
         )}
 
         {currentStep === 5 && (
-          <Placeholder label="Review & Submit" />
+          <BlueprintDeploymentForm ref={deploymentRef} data={deploymentData} onChange={handleDeploymentChange} />
+        )}
+
+        {currentStep === 6 && (
+          <div className="space-y-5">
+            <Placeholder label="Review & Submit" />
+            <DeploymentSummary data={deploymentData} />
+          </div>
         )}
       </fieldset>
 
@@ -217,7 +236,7 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
         busy={saving || working}
         saving={saving}
         nextDisabled={(currentStep === 3 && !permissionsReady) || (currentStep === 4 && !approversReady)}
-        nextLabel={currentStep === 4 ? 'Next: Review & Submit' : undefined}
+        nextLabel={currentStep === 4 ? 'Next: Deployment' : undefined}
         saveDisabled={currentStep === 3 && !permissionsReady}
       />
     </div>

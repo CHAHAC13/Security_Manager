@@ -1,4 +1,4 @@
-import { ALLOW_SAME_PERSON_BOTH_TYPES, MAX_APPROVERS_PER_TYPE } from '@/config/approverConfig';
+import { ALLOW_SAME_PERSON_BOTH_TYPES, MAX_APPROVERS_PER_TYPE, TECHNICAL_OWNERS } from '@/config/approverConfig';
 import type {
   Approver, ApproverType, BlueprintApproversData, PermissionObject, ResourceStatus, RoleApprovers, RoleApproversMap,
 } from '@/types/blueprint';
@@ -45,9 +45,14 @@ export function approversFor(data: BlueprintApproversData, roleId: string): Role
   return data.approvers[roleId] ?? emptyRoleApprovers();
 }
 
-function dedupe(list: Approver[]) {
+function dedupe(list: Approver[], type?: ApproverType) {
   const seen = new Set<string>();
-  return list.filter((item) => !seen.has(item.id) && Boolean(seen.add(item.id)));
+  return list.filter((item) => {
+    const key = type === 'technical' ? item.email.toLowerCase() : item.id;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function sameIds(a: Approver[], b: Approver[]) {
@@ -61,7 +66,11 @@ export function validateRoleApprovers(entry: RoleApprovers, rules: ApproverRules
     if (entry[type].length < 1) errors[type] = `At least one ${APPROVER_TYPE_LABELS[type]} is required`;
     else if (entry[type].length > rules.maxPerType) errors[type] = `No more than ${rules.maxPerType} ${APPROVER_TYPE_LABELS[type]}s are allowed`;
   }
-  const overlap = entry.technical.filter((person) => entry.business.some((other) => other.id === person.id));
+  if (!errors.technical && entry.technical.some((person) => !isTechnicalOwner(person))) {
+    errors.technical = 'Select only Jisun Yoon or Sreeram Koneru as Technical/System Owner';
+  }
+  const overlap = entry.technical.filter((person) => entry.business.some((other) =>
+    other.id === person.id || other.email.toLowerCase() === person.email.toLowerCase()));
   if (overlap.length) {
     const names = overlap.map((person) => person.displayName).join(', ');
     const message = `${names} ${overlap.length > 1 ? 'are' : 'is'} assigned as both ${APPROVER_TYPE_LABELS.technical} and ${APPROVER_TYPE_LABELS.business}`;
@@ -96,12 +105,18 @@ export function isApproversComplete(
 
 export type AddApproverResult =
   | { added: true; entry: RoleApprovers }
-  | { added: false; entry: RoleApprovers; reason: 'duplicate' | 'max' };
+  | { added: false; entry: RoleApprovers; reason: 'duplicate' | 'max' | 'invalid-technical-owner' };
+
+function isTechnicalOwner(approver: Approver) {
+  return TECHNICAL_OWNERS.some((owner) => owner.email.toLowerCase() === approver.email.toLowerCase());
+}
 
 export function addApprover(
   entry: RoleApprovers, type: ApproverType, approver: Approver, rules: ApproverRules = DEFAULT_APPROVER_RULES,
 ): AddApproverResult {
-  if (entry[type].some((item) => item.id === approver.id)) return { added: false, entry, reason: 'duplicate' };
+  if (type === 'technical' && !isTechnicalOwner(approver)) return { added: false, entry, reason: 'invalid-technical-owner' };
+  if (entry[type].some((item) => item.id === approver.id
+    || (type === 'technical' && item.email.toLowerCase() === approver.email.toLowerCase()))) return { added: false, entry, reason: 'duplicate' };
   if (entry[type].length >= rules.maxPerType) return { added: false, entry, reason: 'max' };
   return { added: true, entry: { ...entry, [type]: [...entry[type], approver] } };
 }
@@ -122,9 +137,9 @@ export interface ApplyToAllOptions {
   onlyMissing: boolean;
 }
 
-function nextList(current: Approver[], incoming: Approver[], options: ApplyToAllOptions, rules: ApproverRules) {
+function nextList(current: Approver[], incoming: Approver[], options: ApplyToAllOptions, rules: ApproverRules, type: ApproverType) {
   if (!incoming.length || (options.onlyMissing && current.length > 0)) return current;
-  const merged = options.mode === 'replace' ? dedupe(incoming) : dedupe([...current, ...incoming]);
+  const merged = options.mode === 'replace' ? dedupe(incoming, type) : dedupe([...current, ...incoming], type);
   // Keep existing approvers even if they exceed the limit; only cap what is newly added.
   return merged.slice(0, Math.max(rules.maxPerType, options.mode === 'add' ? current.length : 0));
 }
@@ -132,13 +147,16 @@ function nextList(current: Approver[], incoming: Approver[], options: ApplyToAll
 export function applyToAll(
   data: BlueprintApproversData, roleIds: string[], options: ApplyToAllOptions, rules: ApproverRules = DEFAULT_APPROVER_RULES,
 ): { data: BlueprintApproversData; updatedRoleIds: string[] } {
+  if (options.technical.some((person) => !isTechnicalOwner(person))) {
+    throw new Error('Select only Jisun Yoon or Sreeram Koneru as Technical/System Owner');
+  }
   const approvers: RoleApproversMap = { ...data.approvers };
   const updatedRoleIds: string[] = [];
   for (const roleId of roleIds) {
     const current = approversFor(data, roleId);
     const next: RoleApprovers = {
-      technical: nextList(current.technical, options.technical, options, rules),
-      business: nextList(current.business, options.business, options, rules),
+      technical: nextList(current.technical, options.technical, options, rules, 'technical'),
+      business: nextList(current.business, options.business, options, rules, 'business'),
     };
     if (!sameIds(current.technical, next.technical) || !sameIds(current.business, next.business)) {
       approvers[roleId] = next;
@@ -160,19 +178,22 @@ export function rolesLosingApprovers(
   });
 }
 
-/** Drops approvers for roles that were removed in the Permissions step. Returns the same object when unchanged. */
+/** Drops removed roles and obsolete technical owners. Returns the same object when unchanged. */
 export function reconcileApprovers(data: BlueprintApproversData, roleIds: string[]): BlueprintApproversData {
   const keep = new Set(roleIds);
   const staleApprovers = Object.keys(data.approvers).some((id) => !keep.has(id));
   const stalePrefill = data.prefilledRoleIds.some((id) => !keep.has(id));
-  if (!staleApprovers && !stalePrefill) return data;
+  const obsoleteTechnical = Object.values(data.approvers).some((entry) => entry.technical.some((person) => !isTechnicalOwner(person)));
+  if (!staleApprovers && !stalePrefill && !obsoleteTechnical) return data;
   return {
-    approvers: Object.fromEntries(Object.entries(data.approvers).filter(([id]) => keep.has(id))),
+    approvers: Object.fromEntries(Object.entries(data.approvers).filter(([id]) => keep.has(id)).map(([id, entry]) => [
+      id, { ...entry, technical: entry.technical.filter(isTechnicalOwner) },
+    ])),
     prefilledRoleIds: data.prefilledRoleIds.filter((id) => keep.has(id)),
   };
 }
 
-/** Merges fetched current approvers without overwriting anything the user already entered. */
+/** Merges fetched approvers, keeping valid user selections and excluding obsolete technical owners. */
 export function mergePrefilledApprovers(
   data: BlueprintApproversData, fetched: RoleApproversMap, requestedRoleIds: string[],
 ): BlueprintApproversData {
@@ -181,8 +202,9 @@ export function mergePrefilledApprovers(
     const current = approversFor(data, roleId);
     const incoming = fetched[roleId];
     if (!incoming) continue;
+    const technical = current.technical.filter(isTechnicalOwner);
     approvers[roleId] = {
-      technical: current.technical.length ? current.technical : dedupe(incoming.technical ?? []),
+      technical: technical.length ? technical : dedupe((incoming.technical ?? []).filter(isTechnicalOwner), 'technical'),
       business: current.business.length ? current.business : dedupe(incoming.business ?? []),
     };
   }

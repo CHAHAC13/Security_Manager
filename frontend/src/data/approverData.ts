@@ -1,7 +1,9 @@
 import type { Approver, RoleApprovers } from '@/types/blueprint';
+import { TECHNICAL_OWNERS } from '@/config/approverConfig';
 
 /** Mock corporate directory. Not a directory integration. */
 export const MOCK_DIRECTORY_USERS: Approver[] = [
+  ...TECHNICAL_OWNERS,
   { id: 'u-001', displayName: 'Sanjay Subramanian', email: 'sanjay.subramanian@example.com', department: 'Data Platform Engineering' },
   { id: 'u-002', displayName: 'Anne Croteau', email: 'anne.croteau@example.com', department: 'Clinical Operations' },
   { id: 'u-003', displayName: 'Laura Ross', email: 'laura.ross@example.com', department: 'Clinical Data Management' },
@@ -27,15 +29,15 @@ function user(id: string): Approver {
 
 /** Current approvers of known existing roles, keyed by role name. */
 export const MOCK_ROLE_APPROVERS_BY_NAME: Record<string, RoleApprovers> = {
-  'dbx-env-gpd-user-odx-clinops': { technical: [user('u-001')], business: [user('u-002')] },
-  'dbx-env-gpd-user-odx-clinops-cdm': { technical: [user('u-003')], business: [user('u-004')] },
+  'dbx-env-gpd-user-odx-clinops': { technical: [TECHNICAL_OWNERS[0]], business: [user('u-002')] },
+  'dbx-env-gpd-user-odx-clinops-cdm': { technical: [TECHNICAL_OWNERS[1]], business: [user('u-004')] },
 };
 
 /** Technical/business pairs used for deterministic demo prefill of other existing roles. */
 export const MOCK_FALLBACK_APPROVER_PAIRS: RoleApprovers[] = [
-  { technical: [user('u-005')], business: [user('u-011')] },
-  { technical: [user('u-006')], business: [user('u-012')] },
-  { technical: [user('u-014')], business: [user('u-007')] },
+  { technical: [TECHNICAL_OWNERS[0]], business: [user('u-011')] },
+  { technical: [TECHNICAL_OWNERS[1]], business: [user('u-012')] },
+  { technical: [...TECHNICAL_OWNERS], business: [user('u-007')] },
 ];
 
 /** Sample roles matching the Step 4 specification, useful for tests and demos. */

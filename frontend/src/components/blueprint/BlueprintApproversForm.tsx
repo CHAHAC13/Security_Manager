@@ -7,6 +7,7 @@ import { ApplyToAllModal } from './ApplyToAllModal';
 import { ApproverTable } from './ApproverTable';
 import { ValidationBanner } from './ValidationBanner';
 import { useApprovers } from '@/hooks/useApprovers';
+import { rolesRequiringApproval } from '@/lib/permissions';
 import {
   DEFAULT_APPROVER_RULES, applyToAll, approverRowId, approversFor, describeRoleScope, filterApproverRoles, incompleteRoles,
   setRoleApprovers, validateApprovers, type ApplyToAllOptions, type ApproverRole, type ApproverRules, type RoleFilter,
@@ -14,10 +15,10 @@ import {
 import { cn } from '@/lib/utils';
 import { approverService, type ApproverService } from '@/services/approverService';
 import { permissionsService, type PermissionsService } from '@/services/permissionsService';
-import type { BlueprintApproversData, BlueprintObjectsData, RoleApprovers, RoleAssignment } from '@/types/blueprint';
+import type { ApproverType, BlueprintApproversData, BlueprintObjectsData, RoleApprovers, RoleAssignment } from '@/types/blueprint';
 
 interface Props {
-  /** Role assignments produced by the Permissions step (never refetched here). */
+  /** All role assignments from Permissions; only changed/new roles require approval. */
   roles: RoleAssignment[];
   objectsData: BlueprintObjectsData;
   data: BlueprintApproversData;
@@ -42,21 +43,22 @@ export function BlueprintApproversForm({
   service = approverService, permissions = permissionsService, rules = DEFAULT_APPROVER_RULES,
 }: Props) {
   const loadScopeObjects = useCallback(() => permissions.getSelectedObjects(objectsData), [permissions, objectsData]);
-  const { objects, loading, error, retry } = useApprovers(roles, data, onChange, blueprintId, service, loadScopeObjects);
+  const approvalRoles = useMemo(() => rolesRequiringApproval(roles), [roles]);
+  const { objects, loading, error, retry } = useApprovers(approvalRoles, data, onChange, blueprintId, service, loadScopeObjects);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<RoleFilter>('all');
-  const [modal, setModal] = useState<{ initial?: RoleApprovers } | null>(null);
+  const [modal, setModal] = useState<{ initial?: RoleApprovers; type?: ApproverType } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const dismissToast = useCallback(() => setToast(null), []);
 
-  const approverRoles = useMemo<ApproverRole[]>(() => roles.map((role) => ({
+  const approverRoles = useMemo<ApproverRole[]>(() => approvalRoles.map((role) => ({
     id: role.id, roleName: role.roleName, status: role.status, scope: describeRoleScope(role.scopeObjectId, objects),
-  })), [roles, objects]);
+  })), [approvalRoles, objects]);
   const validation = useMemo(() => validateApprovers(approverRoles, data, rules), [approverRoles, data, rules]);
   const incomplete = useMemo(() => incompleteRoles(approverRoles, data, rules), [approverRoles, data, rules]);
   const visibleRoles = useMemo(() => filterApproverRoles(approverRoles, data, query, filter, rules), [approverRoles, data, query, filter, rules]);
   const completeCount = approverRoles.length - incomplete.length;
-  const ready = !loading && !error && approverRoles.length > 0 && incomplete.length === 0;
+  const ready = !loading && !error && roles.length > 0 && incomplete.length === 0;
   useEffect(() => { onReadyChange(ready); return () => onReadyChange(false); }, [onReadyChange, ready]);
 
   function scrollToRole(roleId: string) {
@@ -69,7 +71,7 @@ export function BlueprintApproversForm({
   }
 
   function apply(options: ApplyToAllOptions) {
-    const result = applyToAll(data, roles.map((role) => role.id), options, rules);
+    const result = applyToAll(data, approvalRoles.map((role) => role.id), options, rules);
     onChange(result.data);
     setModal(null);
     const count = result.updatedRoleIds.length;
@@ -91,7 +93,7 @@ export function BlueprintApproversForm({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900"><Users className="h-4 w-4 text-sky-600" aria-hidden="true" />Assign Approvers</h2>
-            <p className="mt-1 text-sm text-slate-500">Each role needs at least one Technical/System Owner and one Domain/Business Owner.</p>
+            <p className="mt-1 text-sm text-slate-500">Only new roles and roles with permission or Request Manager changes require a Technical/System Owner and a Domain/Business Owner.</p>
           </div>
           {!loading && !error && approverRoles.length > 0 && (
             <div className="flex items-center gap-3">
@@ -123,7 +125,10 @@ export function BlueprintApproversForm({
 
       {!loading && !error && approverRoles.length === 0 && (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center">
-          <p className="mb-4 text-sm text-slate-500">This blueprint has no roles yet. Add role assignments before assigning approvers.</p>
+          <p className="mb-4 text-sm text-slate-500">
+            {roles.length ? 'No changes require approval. Continue to Deployment, or return to Permissions to make changes.'
+              : 'This blueprint has no roles yet. Add role assignments before assigning approvers.'}
+          </p>
           <Button type="button" onClick={onBack}>Back to Permissions</Button>
         </div>
       )}
@@ -148,7 +153,7 @@ export function BlueprintApproversForm({
           {visibleRoles.length ? (
             <ApproverTable roles={visibleRoles} data={data} validation={validation} service={service} rules={rules}
               onRoleChange={(roleId, entry) => onChange(setRoleApprovers(data, roleId, entry))}
-              onCopyToAll={approverRoles.length > 1 ? (roleId) => setModal({ initial: approversFor(data, roleId) }) : undefined} />
+              onCopyToAll={approverRoles.length > 1 ? (roleId, type) => setModal({ initial: approversFor(data, roleId), type }) : undefined} />
           ) : (
             <p className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">No roles match the current search or filter.</p>
           )}
@@ -156,8 +161,8 @@ export function BlueprintApproversForm({
       )}
 
       {modal && (
-        <ApplyToAllModal data={data} roleIds={roles.map((role) => role.id)} service={service} rules={rules}
-          initial={modal.initial} onApply={apply} onClose={() => setModal(null)} />
+        <ApplyToAllModal data={data} roleIds={approvalRoles.map((role) => role.id)} service={service} rules={rules}
+          initial={modal.initial} type={modal.type} onApply={apply} onClose={() => setModal(null)} />
       )}
       {toast && <Toast message={toast} onDismiss={dismissToast} />}
     </div>

@@ -1,5 +1,5 @@
-/** Step identifiers for the 5-step blueprint wizard. */
-export type BlueprintStep = 1 | 2 | 3 | 4 | 5;
+/** Step identifiers for the 6-step blueprint wizard. */
+export type BlueprintStep = 1 | 2 | 3 | 4 | 5 | 6;
 
 export interface BlueprintStepMeta {
   step: BlueprintStep;
@@ -11,7 +11,8 @@ export const BLUEPRINT_STEPS: BlueprintStepMeta[] = [
   { step: 2, label: 'Objects' },
   { step: 3, label: 'Permissions' },
   { step: 4, label: 'Approvers' },
-  { step: 5, label: 'Review' },
+  { step: 5, label: 'Deployment' },
+  { step: 6, label: 'Review & Submit' },
 ];
 
 /** Form data for Step 1: Blueprint Setup. */
@@ -32,6 +33,7 @@ export interface BlueprintFormData {
   objects: BlueprintObjectsData;
   permissions: BlueprintPermissionsData;
   approvers: BlueprintApproversData;
+  deployment: BlueprintDeploymentData;
 }
 
 export const INITIAL_SETUP_DATA: BlueprintSetupData = {
@@ -241,3 +243,25 @@ export const INITIAL_APPROVERS_DATA: BlueprintApproversData = {
   approvers: {},
   prefilledRoleIds: [],
 };
+
+/* ── Step 5: Deployment configuration (not execution) ── */
+
+export type DeploymentStrategy = '' | 'immediate' | 'scheduled';
+
+export interface EnvironmentDeployment {
+  strategy: DeploymentStrategy;
+  /** Local wall-clock value from datetime-local, retained even in an incomplete draft. */
+  scheduledDateTime: string;
+  /** UTC instant; null when Immediate, incomplete or invalid. */
+  scheduledAt: string | null;
+}
+
+export interface BlueprintDeploymentData {
+  environments: Record<PermissionEnvironment, EnvironmentDeployment>;
+  /** IANA timezone captured when this wizard is opened. */
+  timeZone: string;
+  notifyRequestor: boolean;
+  notifyApprovers: boolean;
+}
+
+export type DeploymentErrors = Partial<Record<PermissionEnvironment, Partial<Record<'strategy' | 'scheduledDateTime', string>>>>;

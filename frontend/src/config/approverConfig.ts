@@ -1,3 +1,5 @@
+import type { Approver } from '@/types/blueprint';
+
 /**
  * Approver Assignment (Step 4) configuration.
  * Business-rule values below are working assumptions pending product confirmation.
@@ -5,6 +7,11 @@
 
 /** Maximum approvers allowed per approver type (technical / business) per role. */
 export const MAX_APPROVERS_PER_TYPE = 5;
+
+export const TECHNICAL_OWNERS: readonly Approver[] = [
+  { id: 'technical-jisun-yoon', displayName: 'Jisun Yoon', email: 'Jisun.Yoon@Pfizer.com' },
+  { id: 'technical-sreeram-koneru', displayName: 'Sreeram Koneru', email: 'Sreeram.Koneru@pfizer.com' },
+];
 
 /** When true, the same person in both columns is a warning; when false it is a blocking error. */
 export const ALLOW_SAME_PERSON_BOTH_TYPES = true;

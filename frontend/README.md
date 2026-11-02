@@ -66,9 +66,11 @@ Escape collapses the active card and returns focus to its header.
 The editor uses the existing wizard-owned state, shared footer, buttons and
 badges. The environment remains `dev` by default in wizard state; Setup does not
 display an environment selector.
-The five-step wizard and single-catalog Objects picker are intentionally unchanged.
-Approvers and Review remain the existing placeholders; Deployment is not part of
-this implementation.
+The wizard has six steps: Setup, Objects, Permissions, Approvers, Deployment,
+and Review & Submit. Deployment (Step 5) configures schedules and notifications.
+Review (Step 6) displays the shared deployment configuration; the remainder
+of Review and actual deployment execution are not implemented.
+The single-catalog Objects picker is unchanged.
 
 ### Data flow and API integration
 
@@ -225,13 +227,14 @@ check pass independently.
 ## Blueprint Approvers (Step 4)
 
 Assigns at least one Technical/System Owner and one Domain/Business Owner to
-every role produced by the Permissions step. Roles are read from wizard state
+new roles and existing roles with grant/revoke or active Request Manager changes.
+Unchanged discovered groups are excluded. Roles are read from wizard state
 (`permissionsData.roleAssignments`) and never refetched; approvers are stored in
 `BlueprintFormData.approvers` as `{ approvers: { [roleId]: { technical, business } }, prefilledRoleIds }`.
 
 | File | Responsibility |
 |---|---|
-| `src/config/approverConfig.ts` | `MAX_APPROVERS_PER_TYPE`, `ALLOW_SAME_PERSON_BOTH_TYPES`, debounce/min chars, `USE_MOCK`, mock latency/error toggle, endpoint placeholders. |
+| `src/config/approverConfig.ts` | Fixed `TECHNICAL_OWNERS`, `MAX_APPROVERS_PER_TYPE`, `ALLOW_SAME_PERSON_BOTH_TYPES`, debounce/min chars, `USE_MOCK`, mock latency/error toggle, endpoint placeholders. |
 | `src/services/approverService.ts` | `ApproverService` contract + request/response types, mock implementation, HTTP adapter (`apiClient`). |
 | `src/data/approverData.ts` | Mock directory users, known role approvers and sample roles. |
 | `src/lib/approvers.ts` | Pure validation, add/remove, Apply-to-All, reconcile/prefill, filter and scope helpers (unit-tested). |
@@ -252,11 +255,84 @@ Mock failures can be simulated with `VITE_APPROVERS_MOCK_ERROR=true` or
 
 ### Behaviour notes
 
-- Next ("Next: Review & Submit") is disabled until every role is complete; Save Draft is always allowed.
+- Next ("Next: Deployment") is disabled until every role requiring approval is complete; Save Draft is always allowed.
+- Approval scope uses `rolesRequiringApproval` and the existing permission/Request Manager diff helpers. Reverted edits and changes to inactive Request Manager fields do not require approval. New roles always require approval.
+- Prefill lookups, counters, validation, bulk actions and saved approver payloads include only roles requiring approval. Approvers for reverted/removed roles are pruned without removing those roles from Permissions. With only unchanged roles, no approver lookup is made and "No changes require approval" allows Next to Deployment. A blueprint with no roles still links back to Permissions.
+- Step 5 configures Deployment with Back, Save Draft and Next. Submit appears only on Step 6; selecting Immediate never performs a deployment.
 - Existing-role approvers are prefilled once per role (`prefilledRoleIds`), so user removals are not re-filled on revisit.
+- Technical owners (new and existing roles, including bulk assignment) use non-searchable checkboxes for `Jisun.Yoon@Pfizer.com` and `Sreeram.Koneru@pfizer.com`. Select one or both; directory search cannot add other technical owners.
+- Business owners for existing roles come from `getRoleApprovers` and remain editable/searchable. New roles start empty and use `searchDirectoryUsers` to select business owners. Both operations already have mock and HTTP adapters; backend endpoints are still pending.
+- Each owner column has its own Copy to all action. Technical-only copying never changes business owners (and vice versa), even in Replace mode or when role filters are active.
+- Technical owners display only the two email checkboxes, with no selected-name chips above them. API identities are matched by case-insensitive email, independently of directory IDs. Obsolete technical owners are removed from loaded drafts and API prefill; business owners are unchanged. If no valid technical owner remains, the user must select one before Next. The backend must enforce the same two-person allowlist.
 - Apply to All supports Add/Replace and "Only roles missing approvers" (fills only empty columns); replacing that would remove approvers requires confirmation.
 - Same person in both columns is a warning when `ALLOW_SAME_PERSON_BOTH_TYPES` is true, otherwise a blocking error.
 - UI validation is not a security boundary; the backend must re-validate approvers, reject service accounts and enforce self-approval rules.
+
+## Blueprint Deployment (Step 5)
+
+`BlueprintDeploymentForm` reuses the wizard layout, existing card/input styling,
+shared footer and stepper. It configures exactly three independent rows (Dev,
+Stg, Prd), each with Immediate or Scheduled strategy, plus requestor/approver
+success/failure notification flags. All rows default to Immediate, notifications
+default off, and no example dates are preselected. Immediate means after all
+required approvals, not immediately on selecting an option.
+
+`src/lib/deployment.ts` centralizes environment labels, initial state, immutable
+updates, local-to-UTC conversion, validation and summary formatting.
+`BlueprintFormData.deployment` is the single source of truth in wizard-owned state:
+
+```ts
+{
+  environments: {
+    dev: { strategy: 'immediate', scheduledDateTime: '', scheduledAt: null },
+    stg: { strategy: 'scheduled', scheduledDateTime: '<local YYYY-MM-DDTHH:mm>', scheduledAt: '<UTC ISO timestamp>' },
+    prd: { strategy: 'scheduled', scheduledDateTime: '<local YYYY-MM-DDTHH:mm>', scheduledAt: '<UTC ISO timestamp>' },
+  },
+  timeZone: '<browser IANA timezone>',
+  notifyRequestor: false,
+  notifyApprovers: false,
+}
+```
+
+- Next validates all strategies, requires date/time for Scheduled, and focuses
+  the first invalid field. Errors are displayed beside the affected row/field.
+  Switching to Immediate clears both local and UTC schedule values.
+- Prd cannot precede either Dev or Stg. Immediate Prd is invalid when either
+  lower environment is Scheduled. Scheduled Prd must be at or after both
+  lower scheduled instants. Equal times are allowed; no separate Dev-before-Stg
+  ordering is imposed. Validation never changes dates.
+- Inputs use the user's local timezone captured when the wizard opens.
+  Both wall-clock input and UTC instant are retained, so incomplete drafts
+  remain editable and the future backend does not need to guess timezone.
+  Invalid calendar/DST-skipped times are rejected. Repeated DST times use the
+  browser's earlier occurrence; the resulting UTC timestamp is retained.
+  Past-date and approval-after-schedule handling need backend policy; this step
+  does not invent a future-only rule.
+- Back/Next keeps schedules and notification flags. Save Draft includes the
+  full configuration, even if incomplete, in the existing
+  `PermissionsService.savePermissionsDraft(BlueprintFormData)` payload.
+  `DeploymentSummary` reads exactly that same state on Review, including
+  timezone and notification settings. Review has no duplicate schedule state.
+
+**Integration boundary:** No approval processor, deployment executor, notification
+sender or durable draft endpoint exists yet. The default permissions API adapter
+explicitly rejects draft writes with the existing visible error; its injectable
+mock only checks serialization and does not persist after leaving the wizard.
+This change extends that draft contract, not production persistence. Final Submit
+remains the pre-existing console-only placeholder, now including deployment data.
+
+The future execution backend must authorize and revalidate the configuration,
+wait for every required approval, enforce actual lower-environment completion
+before Production, and derive all deployments from one immutable approved
+blueprint version. It must track each environment's success/failure, logs,
+errors and timestamps independently and honor notification flags. Selecting
+Immediate, Next, Save Draft or Review does not execute deployment, send messages,
+or mark any environment/blueprint successful.
+
+Tests cover independent strategies, exact defaults, required/invalid schedules,
+UTC conversion (including an America/New_York DST run), Production order,
+notification toggles, retained Back/Next edits, partial and complete draft
+payloads, save failure/retry, and Review reading updated shared state.
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 

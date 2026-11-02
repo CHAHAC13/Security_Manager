@@ -7,7 +7,7 @@ import {
 } from '@/lib/approvers';
 import { cn } from '@/lib/utils';
 import type { ApproverService } from '@/services/approverService';
-import type { BlueprintApproversData, RoleApprovers } from '@/types/blueprint';
+import type { ApproverType, BlueprintApproversData, RoleApprovers } from '@/types/blueprint';
 
 interface Props {
   roles: ApproverRole[];
@@ -15,8 +15,8 @@ interface Props {
   validation: Record<string, RoleApproverValidation>;
   service: ApproverService;
   onRoleChange: (roleId: string, entry: RoleApprovers) => void;
-  /** Per-row "Copy to all" action; omitted when there is only one role. */
-  onCopyToAll?: (roleId: string) => void;
+  /** Copies only the chosen owner type; omitted when there is only one role. */
+  onCopyToAll?: (roleId: string, type: ApproverType) => void;
   rules?: ApproverRules;
 }
 
@@ -59,12 +59,6 @@ export function ApproverTable({ roles, data, validation, service, onRoleChange, 
                       </span>
                     )}
                   </div>
-                  {onCopyToAll && (entry.technical.length > 0 || entry.business.length > 0) && (
-                    <button type="button" onClick={() => onCopyToAll(role.id)} aria-label={`Copy approvers of ${name} to all roles`}
-                      className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-sky-700 hover:text-sky-900 hover:underline">
-                      <Copy className="h-3 w-3" aria-hidden="true" />Copy to all
-                    </button>
-                  )}
                 </th>
                 {APPROVER_TYPES.map((type) => (
                   <td key={type} className="block pb-3 align-top lg:table-cell lg:px-4 lg:py-3">
@@ -78,6 +72,13 @@ export function ApproverTable({ roles, data, validation, service, onRoleChange, 
                         if (outcome.added) onRoleChange(role.id, outcome.entry);
                       }}
                       onRemove={(approverId) => onRoleChange(role.id, removeApprover(entry, type, approverId))} />
+                    {onCopyToAll && entry[type].length > 0 && (
+                      <button type="button" onClick={() => onCopyToAll(role.id, type)}
+                        aria-label={`Copy ${APPROVER_TYPE_LABELS[type]}s of ${name} to all roles`}
+                        className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-sky-700 hover:text-sky-900 hover:underline">
+                        <Copy className="h-3 w-3" aria-hidden="true" />Copy to all
+                      </button>
+                    )}
                   </td>
                 ))}
                 <td className="block align-top lg:table-cell lg:px-4 lg:py-3">
