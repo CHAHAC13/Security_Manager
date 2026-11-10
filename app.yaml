@@ -13,5 +13,6 @@ env:
   # OpenTelemetry: export endpoint is injected by Databricks Apps; do not hardcode it.
   - name: OTEL_SERVICE_NAME
     value: "idp-security-manager"
-  - name: OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED
-    value: "true"
+  # Temporary: also print spans to logs to debug missing traces in otel_spans.
+  - name: OTEL_TRACES_EXPORTER
+    value: "otlp,console"
