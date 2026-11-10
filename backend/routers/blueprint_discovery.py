@@ -1,7 +1,7 @@
 import asyncio
 from typing import Any, Literal, NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from core.cache import discovery_cache
 from core.config import Settings, get_settings
@@ -146,7 +146,7 @@ def to_databricks_securable_type(securable_type: str) -> str:
 
 def map_privilege_assignment(
     assignment: dict[str, Any],
-    securable_type: str,
+    securable_type: Literal["CATALOG", "SCHEMA", "TABLE", "VIEW"],
     full_name: str,
     include_inherited: bool,
 ) -> ObjectPrivilegeResponse | None:
@@ -228,6 +228,57 @@ def map_privilege_assignment(
         principal=principal.strip(),
         privileges=privileges,
     )
+
+@router.get("/catalog-name-exists")
+async def catalog_name_exists(
+    response: Response,
+    name: str = Query(min_length=1, max_length=200),
+    client: DatabricksUnityCatalogClient = Depends(get_databricks_client),
+) -> dict[str, bool]:
+    try:
+        catalogs = await client.list_catalogs()
+        exists = resource_name_exists(catalogs, name)
+    except DatabricksApiError as exc:
+        raise_databricks_error(exc)
+    response.headers["Cache-Control"] = "no-store"
+    return {"exists": exists}
+
+
+def resource_name_exists(items: list[dict[str, Any]], name: str) -> bool:
+    names = [required_string(item, "name").casefold() for item in items]
+    return name.strip().casefold() in names
+
+
+@router.get("/catalogs/{catalog_name}/schema-name-exists")
+async def schema_name_exists(
+    catalog_name: str,
+    response: Response,
+    name: str = Query(min_length=1, max_length=200),
+    client: DatabricksUnityCatalogClient = Depends(get_databricks_client),
+) -> dict[str, bool]:
+    try:
+        exists = resource_name_exists(await client.list_schemas(catalog_name), name)
+    except DatabricksApiError as exc:
+        raise_databricks_error(exc)
+    response.headers["Cache-Control"] = "no-store"
+    return {"exists": exists}
+
+
+@router.get("/catalogs/{catalog_name}/schemas/{schema_name}/object-name-exists")
+async def object_name_exists(
+    catalog_name: str,
+    schema_name: str,
+    response: Response,
+    name: str = Query(min_length=1, max_length=200),
+    client: DatabricksUnityCatalogClient = Depends(get_databricks_client),
+) -> dict[str, bool]:
+    try:
+        exists = resource_name_exists(await client.list_tables_and_views(catalog_name, schema_name), name)
+    except DatabricksApiError as exc:
+        raise_databricks_error(exc)
+    response.headers["Cache-Control"] = "no-store"
+    return {"exists": exists}
+
 
 @router.get("/catalogs", response_model=PaginatedResponse[CatalogResponse])
 async def get_catalogs(

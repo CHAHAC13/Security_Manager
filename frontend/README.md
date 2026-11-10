@@ -31,6 +31,30 @@ Escape, outside clicks, and tabbing out still dismiss it.
 The backend's configured tag eligibility filter is unchanged; searching does not
 reveal catalogs excluded by that filter.
 
+New catalog, schema, and table/view definitions are local wizard proposals,
+not resources created in Databricks. Adding a catalog selects it; adding a
+schema selects and focuses it, and adding an object selects it. Names are checked
+case-insensitively against proposals in the same scope and against fresh
+Databricks catalog, schema, and table/view lists. Dedicated name-check endpoints
+return a boolean, bypass the discovery cache and do not reserve names. Catalog
+checks do not apply the picker's tag filter. Checks are limited to resources
+visible to the configured Databricks identity.
+Discovery failures prevent adding a proposal and are displayed for retry.
+Proposed parents are never sent to schema or object discovery.
+The existing-catalog picker is disabled while defining or using a proposed
+catalog; the proposal is displayed separately and can be removed. Proposed
+schemas and objects have their own Remove controls; existing resources do not.
+Removal requires confirmation. Removing a proposed catalog or schema also
+removes its proposed descendants; related permissions and roles scoped directly
+to removed resources, including their approvers, are removed from the wizard.
+Switching catalogs after configuring roles or approvers requires confirmation;
+on confirmation, the old catalog's assignments and approvers are cleared rather
+than transferred to the new catalog.
+When Permissions is first opened for a proposed catalog, a catalog-scoped role
+is added with a blank name and type. Returning to the step does not recreate a
+removed role. Regular new roles start with blank scope, type and name; selecting
+a scope and type still offers the existing generated name.
+
 ## Blueprint Permissions (Step 3)
 
 The Permissions editor uses collapsible Role Assignment cards. Each single-line

@@ -28,6 +28,9 @@ export interface DiscoveryPage<T> {
 }
 
 export interface ObjectDiscoveryService {
+  catalogNameExists(name: string, signal?: AbortSignal): Promise<boolean>;
+  schemaNameExists(catalogId: string, name: string, signal?: AbortSignal): Promise<boolean>;
+  objectNameExists(catalogId: string, schemaId: string, name: string, signal?: AbortSignal): Promise<boolean>;
   getCatalogs(request: DiscoveryPageRequest): Promise<DiscoveryPage<CatalogOption>>;
   getSchemas(
     catalogId: string,
@@ -133,7 +136,24 @@ function apiPageParams(request: DiscoveryPageRequest) {
   };
 }
 
+async function checkResourceName(url: string, name: string, signal?: AbortSignal): Promise<boolean> {
+  return withApiErrors(async () => {
+    const { data } = await apiClient.get<{ exists: boolean }>(url, { params: { name }, signal });
+    if (typeof data?.exists !== 'boolean') throw new Error('Unexpected resource name validation response');
+    return data.exists;
+  });
+}
+
 export const apiObjectDiscoveryService: ObjectDiscoveryService = {
+  catalogNameExists(name, signal) {
+    return checkResourceName('/api/v1/discovery/catalog-name-exists', name, signal);
+  },
+  schemaNameExists(catalogId, name, signal) {
+    return checkResourceName(`/api/v1/discovery/catalogs/${encodeURIComponent(catalogId)}/schema-name-exists`, name, signal);
+  },
+  objectNameExists(catalogId, schemaId, name, signal) {
+    return checkResourceName(`/api/v1/discovery/catalogs/${encodeURIComponent(catalogId)}/schemas/${encodeURIComponent(schemaId)}/object-name-exists`, name, signal);
+  },
   async getCatalogs(request) {
     return withApiErrors(async () => {
       const { data } = await apiClient.get<ApiPage<ApiCatalog>>(
@@ -243,6 +263,19 @@ function mockRequest(signal?: AbortSignal): Promise<void> {
 }
 
 export const mockObjectDiscoveryService: ObjectDiscoveryService = {
+  async catalogNameExists(name, signal) {
+    await mockRequest(signal);
+    return MOCK_CATALOGS.some((catalog) => catalog.name.toLowerCase() === name.toLowerCase());
+  },
+  async schemaNameExists(catalogId, name, signal) {
+    await mockRequest(signal);
+    return MOCK_SCHEMAS.some((schema) => schema.catalogId === catalogId && schema.name.toLowerCase() === name.toLowerCase());
+  },
+  async objectNameExists(catalogId, schemaId, name, signal) {
+    await mockRequest(signal);
+    const schema = MOCK_SCHEMAS.find((item) => item.catalogId === catalogId && (item.id === schemaId || item.name === schemaId));
+    return MOCK_OBJECTS.some((object) => object.schemaId === schema?.id && object.name.toLowerCase() === name.toLowerCase());
+  },
   async getCatalogs(request) {
     await mockRequest(request.signal);
     return pageItems(MOCK_CATALOGS, request);

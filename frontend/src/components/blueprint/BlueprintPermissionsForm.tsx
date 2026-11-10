@@ -1,10 +1,10 @@
-import { useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { RoleAssignmentCard } from './RoleAssignmentCard';
 import { CreateRoleAssignmentDialog } from './CreateRoleAssignmentDialog';
 import { usePermissions } from '@/hooks/usePermissions';
-import { createRole, hasPermissionErrors, refreshRole, scopedObjects, validatePermissions } from '@/lib/permissions';
+import { createBlankRole, hasPermissionErrors, refreshRole, scopedObjects, validatePermissions } from '@/lib/permissions';
 import { PermissionsValidationError, permissionsService, type PermissionsService } from '@/services/permissionsService';
 import type { BlueprintPermissionsData, BlueprintObjectsData, PermissionEnvironment, PermissionObject, PermissionsErrors, RoleAssignment } from '@/types/blueprint';
 
@@ -34,13 +34,14 @@ function focusFirstError(container: HTMLDivElement | null) {
 }
 
 export function BlueprintPermissionsForm({ data, objectsData, environment, onChange, onBack, onReadyChange, ref, service = permissionsService }: Props) {
-  const { loaded, loading, error, retry } = usePermissions(objectsData, data, environment, onChange, service);
   const container = useRef<HTMLDivElement>(null);
   const [creating, setCreating] = useState(false);
   const [creationScope, setCreationScope] = useState<PermissionObject | null>(null);
   const [errors, setErrors] = useState<PermissionsErrors>({ roles: {} });
   const [validating, setValidating] = useState(false);
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
+  const onAutomaticRole = useCallback((id: string) => setExpandedIds((current) => [...current, id]), []);
+  const { loaded, loading, error, retry } = usePermissions(objectsData, data, environment, onChange, service, onAutomaticRole);
   const ready = !loading && !error && Boolean(loaded?.objects.length) && !validating;
   useEffect(() => { onReadyChange(ready); return () => onReadyChange(false); }, [onReadyChange, ready]);
   function showErrors(next: PermissionsErrors) {
@@ -139,7 +140,7 @@ export function BlueprintPermissionsForm({ data, objectsData, environment, onCha
       {creating && loaded && <CreateRoleAssignmentDialog objects={loaded.objects} environment={environment}
         assignedIds={data.roleAssignments.map((role) => role.id)} service={service} onClose={() => setCreating(false)}
         onNew={() => {
-          const role = createRole(crypto.randomUUID(), loaded.objects, environment, loaded.metadata.roleTypes[0]?.code ?? '');
+          const role = createBlankRole(crypto.randomUUID(), loaded.objects, environment);
           addRole(creationScope ? refreshRole({
             ...role,
             level: creationScope.objectType === 'CATALOG' ? 'CATALOG' : creationScope.objectType === 'SCHEMA' ? 'SCHEMA' : 'OBJECT',

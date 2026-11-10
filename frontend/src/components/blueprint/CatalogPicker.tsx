@@ -5,6 +5,8 @@ import { cn } from '@/lib/utils';
 
 interface CatalogPickerProps {
   value: string;
+  valueLabel?: string;
+  disabled?: boolean;
   items: CatalogOption[];
   search: string;
   loading: boolean;
@@ -19,6 +21,8 @@ interface CatalogPickerProps {
 
 export function CatalogPicker({
   value,
+  valueLabel,
+  disabled = false,
   items,
   search,
   loading,
@@ -79,18 +83,19 @@ export function CatalogPicker({
         ref={triggerRef}
         id="catalog-select"
         type="button"
-        aria-label={`Catalog selection: ${value || 'Select a catalog'}`}
+        disabled={disabled}
+        aria-label={`Catalog selection: ${valueLabel || value || 'Select a catalog'}`}
         aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-controls={open ? 'catalog-picker' : undefined}
+        aria-expanded={open && !disabled}
+        aria-controls={open && !disabled ? 'catalog-picker' : undefined}
         onClick={() => setOpen((current) => !current)}
-        className="flex w-full items-center gap-3 h-9 px-3 bg-white border border-slate-300 rounded-md text-sm text-slate-900 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+        className="flex w-full items-center gap-3 h-9 px-3 bg-white border border-slate-300 rounded-md text-sm text-slate-900 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
       >
         <span className="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Target:</span>
-        <span className="flex-1 truncate text-left font-mono">{value || 'Select a catalog…'}</span>
+        <span className="flex-1 truncate text-left font-mono">{valueLabel || value || 'Select a catalog…'}</span>
         <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
       </button>
-      {open && (
+      {open && !disabled && (
         <div
           id="catalog-picker"
           role="dialog"
