@@ -26,6 +26,48 @@ DIST_DIR = ROOT_DIR / "frontend" / "dist"
 PORT = int(os.environ.get("DATABRICKS_APP_PORT", 8000))
 
 
+# ── TEMPORARY: OpenTelemetry startup diagnostics ──
+# Prints the effective OTEL_* settings and the active tracer provider once at
+# startup so we can see why spans are not reaching otel_spans. Sensitive values
+# (headers, tokens, keys) are masked. Remove once traces are confirmed working.
+def _log_otel_diagnostics() -> None:
+    sensitive = ("HEADER", "TOKEN", "KEY", "SECRET", "PASSWORD", "AUTH")
+    lines = []
+    for name in sorted(os.environ):
+        if not name.startswith("OTEL_"):
+            continue
+        value = os.environ[name]
+        if any(word in name for word in sensitive):
+            value = f"<masked, {len(value)} chars>"
+        lines.append(f"{name}={value}")
+    if not lines:
+        lines.append("(no OTEL_* environment variables set)")
+
+    try:
+        from opentelemetry import trace
+
+        provider = trace.get_tracer_provider()
+        lines.append(f"tracer_provider={type(provider).__module__}.{type(provider).__name__}")
+        sampler = getattr(provider, "sampler", None)
+        if sampler is not None:
+            lines.append(f"sampler={sampler.get_description()}")
+        processor = getattr(provider, "_active_span_processor", None)
+        processors = getattr(processor, "_span_processors", ()) if processor else ()
+        exporters = [
+            type(getattr(p, "span_exporter", getattr(p, "_exporter", p))).__name__
+            for p in processors
+        ]
+        lines.append(f"span_exporters={exporters or 'none'}")
+    except Exception as exc:  # diagnostics must never break startup
+        lines.append(f"tracer_provider=<error: {exc!r}>")
+
+    for line in lines:
+        print(f"[otel-diag] {line}", file=sys.stderr, flush=True)
+
+
+_log_otel_diagnostics()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
