@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -14,12 +14,15 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { CatalogPicker } from './CatalogPicker';
-import { objectDiscoveryKey, useObjectDiscovery } from '@/hooks/useObjectDiscovery';
-import type { BlueprintObjectsData, ObjectKind, ObjectOption } from '@/types/blueprint';
+import { useObjectDiscovery } from '@/hooks/useObjectDiscovery';
+import { objectDiscoveryService } from '@/services/objectDiscoveryService';
+import type { BlueprintObjectsData, ObjectKind, ObjectOption, SchemaOption } from '@/types/blueprint';
 
 interface BlueprintObjectsFormProps {
   data: BlueprintObjectsData;
   onChange: (data: BlueprintObjectsData) => void;
+  onCheckingChange?: (checking: boolean) => void;
+  onBeforeCatalogChange?: () => boolean;
 }
 
 /* ── Helpers ── */
@@ -86,23 +89,35 @@ function PaginationControls({
 
 /* ── Main Component ── */
 
-export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormProps) {
+export function BlueprintObjectsForm({ data, onChange, onCheckingChange, onBeforeCatalogChange }: BlueprintObjectsFormProps) {
   const [activeCreation, setActiveCreation] = useState<'catalog' | 'schema' | 'object' | null>(null);
   const [proposalName, setProposalName] = useState('');
   const [proposalKind, setProposalKind] = useState<ObjectKind>('table');
   const [proposalError, setProposalError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const checkController = useRef<AbortController | null>(null);
+  useEffect(() => () => checkController.current?.abort(), []);
+  useEffect(() => {
+    onCheckingChange?.(checking);
+    return () => onCheckingChange?.(false);
+  }, [checking, onCheckingChange]);
   const [catalogSearch, setCatalogSearch] = useState('');
+  const proposedCatalog = data.proposedCatalogs.find((catalog) => catalog.id === data.selectedCatalogId);
+  const proposedSchema = data.proposedSchemas.find((schema) => schema.id === data.focusedSchemaId
+    && schema.catalogId === data.selectedCatalogId);
   const focusedSchemaId = data.selectedSchemaIds.includes(data.focusedSchemaId ?? '')
     ? data.focusedSchemaId
     : null;
-  const discovery = useObjectDiscovery(data.selectedCatalogId || null, focusedSchemaId, catalogSearch);
+  const discovery = useObjectDiscovery(proposedCatalog ? null : data.selectedCatalogId || null,
+    proposedCatalog || proposedSchema ? null : focusedSchemaId, catalogSearch);
   const schemas = discovery.schemas.items;
   const visibleSchemas = discovery.schemas.pageItems;
-  const focusedSchema = schemas.find((schema) => schema.id === data.focusedSchemaId) ?? null;
+  const proposedSchemas: SchemaOption[] = data.proposedSchemas.filter((schema) => schema.catalogId === data.selectedCatalogId);
+  const focusedSchema = schemas.find((schema) => schema.id === data.focusedSchemaId) ?? proposedSchema ?? null;
   const objects = discovery.objects.pageItems;
   const visibleObjects = [
     ...objects,
-    ...data.proposedObjects.filter((object) => object.schemaId === focusedSchema?.id),
+    ...data.proposedObjects.filter((object) => object.catalogId === data.selectedCatalogId && object.schemaId === focusedSchema?.id),
   ];
 
   const selectedSchemaCount = data.selectedSchemaIds.length;
@@ -115,16 +130,70 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
   /* ── Event handlers ── */
 
   function handleCatalogChange(catalogId: string) {
+    if (catalogId !== data.selectedCatalogId && onBeforeCatalogChange && !onBeforeCatalogChange()) return;
+    setActiveCreation(null);
+    setProposalError(null);
     onChange({
       ...data,
       selectedCatalogId: catalogId,
-      selectedCatalog: discovery.catalogs.items.find((catalog) => catalog.id === catalogId)
-        ?? data.proposedCatalogs.find((catalog) => catalog.id === catalogId),
+      selectedCatalog: discovery.catalogs.items.find((catalog) => catalog.id === catalogId),
       selectedSchemas: [],
       selectedSchemaIds: [],
       selectedObjectIds: [],
       selectedObjects: [],
       focusedSchemaId: null,
+    });
+  }
+
+  function removeCatalog() {
+    if (!proposedCatalog) return;
+    if (!window.confirm(`Remove proposed catalog "${proposedCatalog.name}" and its proposed schemas and objects from this blueprint? Related permissions, scoped roles and approvers will also be removed.`)) return;
+    setActiveCreation(null);
+    setProposalError(null);
+    onChange({
+      ...data,
+      selectedCatalogId: '',
+      selectedCatalog: undefined,
+      selectedSchemas: [],
+      selectedSchemaIds: [],
+      selectedObjectIds: [],
+      selectedObjects: [],
+      focusedSchemaId: null,
+      proposedCatalogs: data.proposedCatalogs.filter((catalog) => catalog.id !== proposedCatalog.id),
+      proposedSchemas: data.proposedSchemas.filter((schema) => schema.catalogId !== proposedCatalog.id),
+      proposedObjects: data.proposedObjects.filter((object) => object.catalogId !== proposedCatalog.id),
+    });
+  }
+
+  function removeSchema(schemaId: string, name: string) {
+    if (!window.confirm(`Remove proposed schema "${name}" and its proposed objects from this blueprint? Related permissions, scoped roles and approvers will also be removed.`)) return;
+    const selectedSchemaIds = data.selectedSchemaIds.filter((id) => id !== schemaId);
+    const selectedObjects = data.selectedObjects.filter((object) => object.schemaId !== schemaId);
+    const remainingObjectIds = new Set(selectedObjects.map((object) => object.id));
+    setActiveCreation(null);
+    setProposalError(null);
+    onChange({
+      ...data,
+      proposedSchemas: data.proposedSchemas.filter((schema) => schema.id !== schemaId),
+      proposedObjects: data.proposedObjects.filter((object) =>
+        object.catalogId !== data.selectedCatalogId || object.schemaId !== schemaId),
+      selectedSchemaIds,
+      selectedSchemas: data.selectedSchemas?.filter((schema) => schema.id !== schemaId),
+      selectedObjects,
+      selectedObjectIds: data.selectedObjectIds.filter((id) => remainingObjectIds.has(id)),
+      focusedSchemaId: data.focusedSchemaId === schemaId ? selectedSchemaIds[0] ?? null : data.focusedSchemaId,
+    });
+  }
+
+  function removeObject(objectId: string, name: string) {
+    if (!window.confirm(`Remove proposed object "${name}" from this blueprint? Related permissions, scoped roles and approvers will also be removed.`)) return;
+    setActiveCreation(null);
+    setProposalError(null);
+    onChange({
+      ...data,
+      proposedObjects: data.proposedObjects.filter((object) => object.id !== objectId),
+      selectedObjects: data.selectedObjects.filter((object) => object.id !== objectId),
+      selectedObjectIds: data.selectedObjectIds.filter((id) => id !== objectId),
     });
   }
 
@@ -134,31 +203,58 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
     setProposalError(null);
   }
 
-  function addProposedResource(event: FormEvent<HTMLFormElement>) {
+  async function addProposedResource(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (checking || !activeCreation) return;
     const name = proposalName.trim();
     if (!name) {
       setProposalError('Enter a name to continue.');
       return;
     }
 
-    const normalizedName = name.toLocaleLowerCase();
-    const duplicate = activeCreation === 'catalog'
-      ? [...discovery.catalogs.items, ...data.proposedCatalogs].some((item) => item.name.toLocaleLowerCase() === normalizedName)
-      : activeCreation === 'schema'
-        ? [...schemas, ...data.proposedSchemas.filter((schema) => schema.catalogId === data.selectedCatalogId)].some((item) => item.name.toLocaleLowerCase() === normalizedName)
-        : [...discovery.objects.getCachedItems(objectDiscoveryKey(data.selectedCatalogId, focusedSchema?.id ?? '')), ...data.proposedObjects.filter((object) => object.schemaId === focusedSchema?.id)].some((item) => item.name.toLocaleLowerCase() === normalizedName);
-
-    if (duplicate) {
-      setProposalError('An item with this name already exists in this location.');
+    const kind = activeCreation;
+    const normalizedName = name.toLowerCase();
+    const localItems = kind === 'catalog' ? data.proposedCatalogs
+      : kind === 'schema' ? data.proposedSchemas.filter((schema) => schema.catalogId === data.selectedCatalogId)
+        : data.proposedObjects.filter((object) => object.catalogId === data.selectedCatalogId && object.schemaId === focusedSchema?.id);
+    const controller = new AbortController();
+    checkController.current = controller;
+    setChecking(true);
+    setProposalError(null);
+    try {
+      let duplicate = localItems.some((item) => item.name.toLowerCase() === normalizedName);
+      if (!duplicate && kind === 'catalog') {
+        duplicate = await objectDiscoveryService.catalogNameExists(name, controller.signal);
+      } else if (!duplicate && kind === 'schema' && !proposedCatalog) {
+        duplicate = await objectDiscoveryService.schemaNameExists(data.selectedCatalogId, name, controller.signal);
+      } else if (!duplicate && kind === 'object' && !proposedCatalog && !proposedSchema && focusedSchema) {
+        duplicate = await objectDiscoveryService.objectNameExists(data.selectedCatalogId, focusedSchema.id, name, controller.signal);
+      }
+      if (controller.signal.aborted) return;
+      if (duplicate) {
+        setProposalError(`${kind[0].toUpperCase()}${kind.slice(1)} name already exists.`);
+        return;
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) setProposalError(error instanceof Error ? error.message : 'Unable to check the name. Try again.');
       return;
+    } finally {
+      if (!controller.signal.aborted) setChecking(false);
+      checkController.current = null;
     }
 
     const id = `new-${crypto.randomUUID()}`;
     if (activeCreation === 'catalog') {
-      onChange({ ...data, proposedCatalogs: [...data.proposedCatalogs, { id, name, source: 'new' }] });
+      if (onBeforeCatalogChange && !onBeforeCatalogChange()) return;
+      const catalog = { id, name, source: 'new' as const };
+      onChange({ ...data, selectedCatalogId: id, selectedCatalog: catalog, selectedSchemas: [],
+        selectedSchemaIds: [], selectedObjectIds: [], selectedObjects: [], focusedSchemaId: null,
+        proposedCatalogs: [...data.proposedCatalogs, catalog] });
     } else if (activeCreation === 'schema' && data.selectedCatalogId) {
-      onChange({ ...data, proposedSchemas: [...data.proposedSchemas, { id, name, catalogId: data.selectedCatalogId, source: 'new' }] });
+      const schema = { id, name, catalogId: data.selectedCatalogId, source: 'new' as const };
+      onChange({ ...data, proposedSchemas: [...data.proposedSchemas, schema],
+        selectedSchemaIds: [...data.selectedSchemaIds, id], selectedSchemas: [...(data.selectedSchemas ?? []), schema],
+        focusedSchemaId: id });
     } else if (activeCreation === 'object' && focusedSchema) {
       const proposedObject: ObjectOption = {
         id,
@@ -172,7 +268,7 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
         ...data,
         selectedObjectIds: [...new Set([...data.selectedObjectIds, id])],
         selectedObjects: [...data.selectedObjects.filter((object) => object.id !== id), proposedObject],
-        proposedObjects: [...data.proposedObjects, { ...proposedObject, source: 'new' }],
+        proposedObjects: [...data.proposedObjects, { ...proposedObject, catalogId: data.selectedCatalogId, source: 'new' }],
       });
     }
 
@@ -191,6 +287,8 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
             autoFocus
             value={proposalName}
             onChange={(event) => setProposalName(event.target.value)}
+            placeholder={kind === 'catalog' ? 'dbx-<env>-gpd-<role>-<catalog>' : undefined}
+            maxLength={200}
             className="mt-1 block w-full h-9 rounded border border-slate-300 bg-white px-2.5 text-sm text-slate-900 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
           />
         </label>
@@ -204,7 +302,7 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
             </select>
           </label>
         )}
-        <button type="submit" className="h-9 rounded bg-sky-700 px-3 text-xs font-semibold text-white hover:bg-sky-800">Add to draft</button>
+        <button type="submit" disabled={checking} className="h-9 rounded bg-sky-700 px-3 text-xs font-semibold text-white hover:bg-sky-800 disabled:opacity-50">{checking ? 'Checking...' : 'Add'}</button>
         <button type="button" onClick={() => setActiveCreation(null)} className="h-9 rounded border border-slate-300 px-3 text-xs font-medium text-slate-600 hover:bg-white">Cancel</button>
         {proposalError && <p role="alert" className="basis-full text-xs text-red-700">{proposalError}</p>}
       </form>
@@ -212,6 +310,8 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
   }
 
   function toggleSchema(schemaId: string) {
+    setActiveCreation(null);
+    setProposalError(null);
     const isSelected = data.selectedSchemaIds.includes(schemaId);
     const nextSchemaIds = isSelected
       ? data.selectedSchemaIds.filter((id) => id !== schemaId)
@@ -251,6 +351,8 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
 
   function focusSchema(schemaId: string) {
     if (data.selectedSchemaIds.includes(schemaId)) {
+      setActiveCreation(null);
+      setProposalError(null);
       onChange({ ...data, focusedSchemaId: schemaId });
     }
   }
@@ -272,13 +374,13 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
   /* How many objects are scoped for a given schema */
   function scopedObjectCount(schemaId: string): number {
     const schemaObjIds = new Set(
-      discovery.objects.getCachedItems(objectDiscoveryKey(data.selectedCatalogId, schemaId)).map((object) => object.id),
+      data.selectedObjects.filter((object) => object.schemaId === schemaId).map((object) => object.id),
     );
     return data.selectedObjectIds.filter((id) => schemaObjIds.has(id)).length;
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+    <fieldset disabled={checking} className="grid min-w-0 grid-cols-1 lg:grid-cols-12 gap-6 items-start">
       {/* ── Left: Object Wizard Card ── */}
       <div className="lg:col-span-8 xl:col-span-9 bg-white rounded-xl p-6 shadow-sm border border-slate-200 space-y-6">
         {/* Card header */}
@@ -308,7 +410,9 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
 
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
             <CatalogPicker
-              value={data.selectedCatalogId}
+              value={proposedCatalog ? '' : data.selectedCatalogId}
+              valueLabel={proposedCatalog ? undefined : data.selectedCatalog?.name}
+              disabled={Boolean(proposedCatalog) || activeCreation === 'catalog'}
               items={discovery.catalogs.items}
               search={catalogSearch}
               loading={discovery.catalogs.loading || discovery.catalogs.searching}
@@ -324,17 +428,20 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
             <button
               type="button"
               onClick={() => openCreation('catalog')}
-              className="inline-flex items-center justify-center gap-1.5 px-4 h-9 rounded-md bg-slate-100 hover:bg-slate-200 text-xs font-medium text-slate-700 border border-slate-200 transition-colors shrink-0"
+              disabled={Boolean(proposedCatalog)}
+              className="inline-flex items-center justify-center gap-1.5 px-4 h-9 rounded-md bg-slate-100 hover:bg-slate-200 text-xs font-medium text-slate-700 border border-slate-200 transition-colors shrink-0 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Plus className="w-3.5 h-3.5" />
               Create New Catalog
             </button>
           </div>
           {creationForm('catalog')}
-          {data.proposedCatalogs.length > 0 && (
-            <ul aria-label="Proposed catalogs" className="space-y-1 text-xs text-sky-800">
-              {data.proposedCatalogs.map((catalog) => <li key={catalog.id}>Proposed catalog: <span className="font-mono">{catalog.name}</span></li>)}
-            </ul>
+          {proposedCatalog && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed border-sky-300 bg-sky-50 px-3 py-2 text-xs text-sky-800">
+              <span>New proposed catalog: <span className="font-mono font-semibold">{proposedCatalog.name}</span> <span className="text-sky-600">(not yet created)</span></span>
+              <button type="button" onClick={removeCatalog} aria-label={`Remove proposed catalog ${proposedCatalog.name}`}
+                className="font-semibold text-rose-700 hover:underline">Remove</button>
+            </div>
           )}
 
         </div>
@@ -351,7 +458,7 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
                 <span className="text-[11px] text-slate-400 mt-0.5">
                   Available in{' '}
                   <span className="font-mono text-sky-600 font-medium">
-                    {discovery.catalogs.items.find((catalog) => catalog.id === data.selectedCatalogId)?.name ?? data.selectedCatalogId}
+                    {data.selectedCatalog?.name ?? data.selectedCatalogId}
                   </span>
                 </span>
               </div>
@@ -372,15 +479,16 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
               <p role="status" aria-live="polite" className="text-xs text-slate-500 px-1">Loading schemas…</p>
             )}
 
-            {!discovery.schemas.loading && !discovery.schemas.error && schemas.length === 0 && (
+            {!discovery.schemas.loading && !discovery.schemas.error && schemas.length === 0 && proposedSchemas.length === 0 && (
               <p className="text-xs text-slate-500 px-1">No schemas found in this catalog.</p>
             )}
 
             <div aria-busy={discovery.schemas.loading} className="flex flex-col gap-2 bg-slate-50/60 border border-slate-200/60 p-3 rounded-xl">
-              {visibleSchemas.map((schema) => {
+              {[...visibleSchemas, ...proposedSchemas].map((schema) => {
                 const isChecked = data.selectedSchemaIds.includes(schema.id);
                 const isFocused = data.focusedSchemaId === schema.id;
                 const scoped = scopedObjectCount(schema.id);
+                const isProposed = proposedSchemas.some((item) => item.id === schema.id);
 
                 return (
                   <div
@@ -423,31 +531,29 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
                         </span>}
                       </div>
                     </label>
-                    <span
-                      className={cn(
-                        'text-[11px] font-medium',
-                        isFocused && isChecked
-                          ? 'text-sky-700 font-semibold'
-                          : isChecked
-                            ? 'text-slate-500'
-                            : 'text-slate-400',
-                      )}
-                    >
-                      {isChecked && scoped > 0
-                        ? `${scoped} object${scoped === 1 ? '' : 's'} scoped`
-                        : schema.objectCount !== undefined ? `${schema.objectCount} objects` : 'Browse objects'}
-                    </span>
+                    <div className="flex items-center gap-3">
+                      {isProposed && <span className="rounded border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] text-sky-700">Proposed</span>}
+                      <span
+                        className={cn(
+                          'text-[11px] font-medium',
+                          isFocused && isChecked
+                            ? 'text-sky-700 font-semibold'
+                            : isChecked
+                              ? 'text-slate-500'
+                              : 'text-slate-400',
+                        )}
+                      >
+                        {isChecked && scoped > 0
+                          ? `${scoped} object${scoped === 1 ? '' : 's'} scoped`
+                          : schema.objectCount !== undefined ? `${schema.objectCount} objects` : 'Browse objects'}
+                      </span>
+                      {isProposed && <button type="button" aria-label={`Remove proposed schema ${schema.name}`}
+                        onClick={(event) => { event.stopPropagation(); removeSchema(schema.id, schema.name); }}
+                        className="text-xs font-semibold text-rose-700 hover:underline">Remove</button>}
+                    </div>
                   </div>
                 );
               })}
-              {data.proposedSchemas
-                .filter((schema) => schema.catalogId === data.selectedCatalogId)
-                .map((schema) => (
-                  <div key={schema.id} className="flex items-center justify-between rounded-lg border border-dashed border-sky-300 bg-sky-50/60 p-3 text-xs text-sky-800">
-                    <span className="font-mono font-semibold">{schema.name}</span>
-                    <span>Proposed schema</span>
-                  </div>
-                ))}
             </div>
 
             {(discovery.schemas.hasPreviousPage || discovery.schemas.hasNextPage) && (
@@ -469,7 +575,7 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
                   Selected schemas ({selectedSchemaCount})
                 </p>
                 <div className="flex flex-wrap gap-2">
-                  {schemas
+                  {[...schemas, ...proposedSchemas]
                     .filter((schema) => data.selectedSchemaIds.includes(schema.id))
                     .map((schema) => (
                       <button
@@ -538,11 +644,11 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
               {visibleObjects.map((obj) => {
                 const isChecked = data.selectedObjectIds.includes(obj.id);
                 return (
-                  <label
+                  <div
                     key={obj.id}
-                    className="flex items-center justify-between p-3 rounded-lg bg-white border border-slate-200/70 hover:bg-slate-50 transition-colors cursor-pointer"
+                    className="flex items-center justify-between p-3 rounded-lg bg-white border border-slate-200/70 hover:bg-slate-50 transition-colors"
                   >
-                    <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-3 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={isChecked}
@@ -558,11 +664,15 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
                           [{KIND_LABELS[obj.kind]}]
                         </span>
                       </div>
-                    </div>
+                    </label>
                     {obj.source === 'new' && (
-                      <span className="text-[11px] font-medium text-sky-700 bg-sky-50 border border-sky-200 px-2 py-0.5 rounded">Proposed</span>
+                      <div className="flex items-center gap-3">
+                        <span className="text-[11px] font-medium text-sky-700 bg-sky-50 border border-sky-200 px-2 py-0.5 rounded">Proposed</span>
+                        <button type="button" aria-label={`Remove proposed object ${obj.name}`} onClick={() => removeObject(obj.id, obj.name)}
+                          className="text-xs font-semibold text-rose-700 hover:underline">Remove</button>
+                      </div>
                     )}
-                  </label>
+                  </div>
                 );
               })}
             </div>
@@ -635,6 +745,6 @@ export function BlueprintObjectsForm({ data, onChange }: BlueprintObjectsFormPro
           </div>
         </div>
       </div>
-    </div>
+    </fieldset>
   );
 }

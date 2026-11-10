@@ -5,6 +5,27 @@ import { apiObjectDiscoveryService, mockObjectDiscoveryService } from './objectD
 vi.mock('@/lib/apiClient', () => ({ default: { get: vi.fn() } }));
 
 describe('discovery pagination metadata', () => {
+  it('validates catalog names using the unfiltered name-check endpoint', async () => {
+    vi.mocked(apiClient.get).mockResolvedValueOnce({ data: { exists: true } });
+    expect(await apiObjectDiscoveryService.catalogNameExists('Example')).toBe(true);
+    expect(apiClient.get).toHaveBeenLastCalledWith('/api/v1/discovery/catalog-name-exists', {
+      params: { name: 'Example' }, signal: undefined,
+    });
+    vi.mocked(apiClient.get).mockResolvedValueOnce({ data: {} });
+    await expect(apiObjectDiscoveryService.catalogNameExists('Example')).rejects.toThrow('Unexpected resource name validation response');
+  });
+
+  it('uses uncached name-check endpoints for schemas and objects with encoded scope names', async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({ data: { exists: true } });
+    expect(await apiObjectDiscoveryService.schemaNameExists('my catalog', 'Schema')).toBe(true);
+    expect(apiClient.get).toHaveBeenLastCalledWith('/api/v1/discovery/catalogs/my%20catalog/schema-name-exists', {
+      params: { name: 'Schema' }, signal: undefined,
+    });
+    expect(await apiObjectDiscoveryService.objectNameExists('my catalog', 'my schema', 'Object')).toBe(true);
+    expect(apiClient.get).toHaveBeenLastCalledWith('/api/v1/discovery/catalogs/my%20catalog/schemas/my%20schema/object-name-exists', {
+      params: { name: 'Object' }, signal: undefined,
+    });
+  });
   it('requests catalog-name-only search on every page and preserves filtered totals', async () => {
     vi.mocked(apiClient.get).mockResolvedValue({
       data: {

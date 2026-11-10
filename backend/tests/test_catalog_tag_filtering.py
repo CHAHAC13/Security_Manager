@@ -217,6 +217,18 @@ class TestGetCatalogsEndpoint:
         app = _build_test_app(settings)
         return TestClient(app)
 
+    def test_name_check_includes_untagged_catalogs(self, client: TestClient) -> None:
+        response = client.get("/api/v1/discovery/catalog-name-exists", params={"name": "Unrelated_Catalog"})
+        assert response.status_code == 200
+        assert response.json() == {"exists": True}
+        assert client.get("/api/v1/discovery/catalog-name-exists", params={"name": "absent"}).json() == {"exists": False}
+
+    def test_name_check_surfaces_databricks_errors(self, client: TestClient) -> None:
+        with patch.object(DatabricksUnityCatalogClient, "list_catalogs",
+                          new_callable=AsyncMock, side_effect=DatabricksApiError(403, "Access denied")):
+            response = client.get("/api/v1/discovery/catalog-name-exists", params={"name": "catalog"})
+        assert response.status_code == 403
+
     def test_only_tagged_catalogs_returned(self, client: TestClient) -> None:
         resp = client.get("/api/v1/discovery/catalogs")
         assert resp.status_code == 200

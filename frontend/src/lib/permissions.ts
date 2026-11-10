@@ -52,7 +52,7 @@ export function refreshRole(
   role: RoleAssignment, objects: PermissionObject[], environment: PermissionEnvironment,
 ): RoleAssignment {
   const candidates = scopeOptions(role.level, objects);
-  const scopeObjectId = role.status === 'NEW' && !candidates.some((object) => object.objectId === role.scopeObjectId)
+  const scopeObjectId = role.status === 'NEW' && role.scopeObjectId && !candidates.some((object) => object.objectId === role.scopeObjectId)
     ? candidates[0]?.objectId ?? ''
     : role.scopeObjectId;
   const scoped = scopedObjects({ scopeObjectId }, objects);
@@ -65,20 +65,25 @@ export function refreshRole(
       permissions: current?.permissions ?? [],
     };
   }) };
-  return next.status === 'NEW' && !next.roleNameManuallyEdited
+  return next.status === 'NEW' && !next.roleNameManuallyEdited && next.roleTypeCode
     ? { ...next, roleName: generateRoleName(next, environment, objects) }
     : next;
 }
 
 export function createRole(id: string, objects: PermissionObject[], environment: PermissionEnvironment, roleTypeCode: string): RoleAssignment {
   return refreshRole({
-    id, mode: 'CREATE_NEW', status: 'NEW', level: 'CATALOG', scopeObjectId: '',
+    id, mode: 'CREATE_NEW', status: 'NEW', level: 'CATALOG', scopeObjectId: scopeOptions('CATALOG', objects)[0]?.objectId ?? '',
     roleTypeCode, roleName: '', roleNameManuallyEdited: false, objectPermissions: [],
     requestManager: {
       enabled: false, formType: '', displayName: '',
       originalValues: { enabled: false, formType: '', displayName: '' },
     },
   }, objects, environment);
+}
+
+export function createBlankRole(id: string, objects: PermissionObject[], environment: PermissionEnvironment, scopeObjectId = ''): RoleAssignment {
+  const role = createRole(id, objects, environment, '');
+  return refreshRole({ ...role, scopeObjectId, roleTypeCode: '', roleName: '', roleNameManuallyEdited: false }, objects, environment);
 }
 
 export function reconcilePermissions(
@@ -118,7 +123,7 @@ export function reconcilePermissions(
     }
     knownIds.add(role.id);
   }
-  return { roleAssignments: roles, discoveredRoleIds: [...knownIds], discoveryEnvironment: environment };
+  return { ...data, roleAssignments: roles, discoveredRoleIds: [...knownIds], discoveryEnvironment: environment };
 }
 
 export function permissionChanges(role: RoleAssignment): PermissionChange[] {

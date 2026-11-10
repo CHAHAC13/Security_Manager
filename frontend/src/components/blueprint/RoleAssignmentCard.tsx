@@ -90,6 +90,7 @@ export function RoleAssignmentCard({ role, objects, metadata, environment, error
         <div>
           <label htmlFor={fieldId('roleName')} className="text-xs font-medium text-slate-600">Role Name *</label>
           <input {...accessibility('roleName')} value={role.roleName}
+            placeholder={role.level === 'CATALOG' ? 'dbx-<env>-gpd-<role>-<catalog>' : undefined}
             title={`Prefix: ${roleNamePrefix(environment, role.roleTypeCode)}. Generated names are not truncated.`}
             onChange={(event) => onChange({ ...role, roleName: event.target.value, roleNameManuallyEdited: true })} className={inputClass} />
           <span className={`mt-1 block text-right text-[10px] ${role.roleName.length > 32 ? 'text-rose-700' : 'text-slate-500'}`}>{role.roleName.length}/32</span>

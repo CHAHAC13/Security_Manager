@@ -62,6 +62,7 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
   const actionInProgress = useRef(false);
   const [permissionsReady, setPermissionsReady] = useState(false);
   const [working, setWorking] = useState(false);
+  const [checkingObjects, setCheckingObjects] = useState(false);
   const [saving, setSaving] = useState(false);
   const [draftFeedback, setDraftFeedback] = useState<{ error: boolean; message: string } | null>(null);
   const handlePermissionsChange = useCallback((value: BlueprintPermissionsData) => {
@@ -71,6 +72,7 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
 
   // Step 4 form state
   const [approversData, setApproversData] = useState<BlueprintApproversData>(INITIAL_APPROVERS_DATA);
+  const approversNeedClearing = useRef(false);
   const [approversReady, setApproversReady] = useState(false);
   // TODO(API): replace with the blueprint id issued by the backend on first draft save.
   const [draftBlueprintId] = useState(() => `draft-${crypto.randomUUID()}`);
@@ -78,6 +80,39 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
     setApproversData(value);
     setDraftFeedback(null);
   }, []);
+
+  const handleObjectsChange = useCallback((value: BlueprintObjectsData) => {
+    const catalogChanged = objectsData.selectedCatalogId !== value.selectedCatalogId;
+    const removedCatalogs = objectsData.proposedCatalogs.filter((catalog) => !value.proposedCatalogs.some((item) => item.id === catalog.id));
+    const removedSchemas = objectsData.proposedSchemas.filter((schema) => !value.proposedSchemas.some((item) => item.id === schema.id));
+    const removedObjects = objectsData.proposedObjects.filter((object) => !value.proposedObjects.some((item) => item.id === object.id));
+    const removedIds = new Set([
+      ...removedCatalogs.map((catalog) => JSON.stringify(['catalog', catalog.id])),
+      ...removedSchemas.map((schema) => JSON.stringify(['schema', schema.catalogId, schema.id])),
+      ...removedObjects.map((object) => JSON.stringify(['object', object.catalogId, object.schemaId, object.id])),
+    ]);
+    if (catalogChanged && objectsData.selectedCatalogId) {
+      setPermissionsData(INITIAL_PERMISSIONS_DATA);
+      if (Object.keys(approversData.approvers).length) approversNeedClearing.current = true;
+      setApproversData(reconcileApprovers(approversData, []));
+    } else if (removedIds.size) {
+      const roles = permissionsData.roleAssignments.filter((role) => !removedIds.has(role.scopeObjectId));
+      setPermissionsData({
+        ...permissionsData,
+        roleAssignments: roles,
+        initializedCatalogIds: permissionsData.initializedCatalogIds?.filter((id) => !removedIds.has(id)),
+      });
+      const approvers = reconcileApprovers(approversData, rolesRequiringApproval(roles).map((role) => role.id));
+      if (Object.keys(approvers.approvers).length < Object.keys(approversData.approvers).length) approversNeedClearing.current = true;
+      setApproversData(approvers);
+    }
+    setObjectsData(value);
+    setDraftFeedback(null);
+  }, [objectsData, permissionsData, approversData]);
+  const confirmCatalogChange = useCallback(() => !objectsData.selectedCatalogId
+    || (!permissionsData.roleAssignments.length && !Object.keys(approversData.approvers).length)
+    || window.confirm('Changing the catalog will remove its role assignments, permissions, and approvers from this blueprint. Continue?'),
+  [objectsData.selectedCatalogId, permissionsData.roleAssignments.length, approversData.approvers]);
 
   const [deploymentData, setDeploymentData] = useState<BlueprintDeploymentData>(createDeploymentData);
   const deploymentRef = useRef<DeploymentFormHandle>(null);
@@ -138,8 +173,11 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
       await service.savePermissionsDraft({ setup: setupData, objects: objectsData, permissions, approvers, deployment: deploymentData });
       // Also clear previously assigned owners when all permission changes have been reverted.
       const saveApprovers = currentStep >= 4 || Object.keys(approvers.approvers).length > 0
-        || Object.keys(approversData.approvers).length > 0;
-      if (saveApprovers) await approverService.saveApproversDraft(draftBlueprintId, approvers.approvers);
+        || Object.keys(approversData.approvers).length > 0 || approversNeedClearing.current;
+      if (saveApprovers) {
+        await approverService.saveApproversDraft(draftBlueprintId, approvers.approvers);
+        approversNeedClearing.current = false;
+      }
       setDraftFeedback({
         error: false,
         message: saveApprovers
@@ -178,7 +216,8 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
         )}
 
         {currentStep === 2 && (
-          <BlueprintObjectsForm data={objectsData} onChange={(value) => { setObjectsData(value); setDraftFeedback(null); }} />
+          <BlueprintObjectsForm data={objectsData} onChange={handleObjectsChange} onCheckingChange={setCheckingObjects}
+            onBeforeCatalogChange={confirmCatalogChange} />
         )}
 
         {currentStep === 3 && (
@@ -233,7 +272,7 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
         onNext={handleNext}
         onCancel={handleCancel}
         onSaveDraft={handleSaveDraft}
-        busy={saving || working}
+        busy={saving || working || checkingObjects}
         saving={saving}
         nextDisabled={(currentStep === 3 && !permissionsReady) || (currentStep === 4 && !approversReady)}
         nextLabel={currentStep === 4 ? 'Next: Deployment' : undefined}

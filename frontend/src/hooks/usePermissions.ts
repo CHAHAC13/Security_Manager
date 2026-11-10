@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { reconcilePermissions } from '@/lib/permissions';
+import { createBlankRole, reconcilePermissions } from '@/lib/permissions';
 import type { BlueprintObjectsData, BlueprintPermissionsData, PermissionEnvironment, PermissionMetadata, PermissionObject } from '@/types/blueprint';
 import type { PermissionsService } from '@/services/permissionsService';
 
@@ -14,6 +14,7 @@ export function usePermissions(
   environment: PermissionEnvironment,
   onChange: (value: BlueprintPermissionsData) => void,
   service: PermissionsService,
+  onAutomaticRole: (id: string) => void,
 ) {
   const [loaded, setLoaded] = useState<LoadedPermissions | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -30,7 +31,15 @@ export function usePermissions(
         ]);
         const roles = await service.getExistingRolesForObjects(objects, environment);
         if (!active) return;
-        onChange(reconcilePermissions(data, objects, roles, environment));
+        const next = reconcilePermissions(data, objects, roles, environment);
+        const catalog = objects.find((object) => object.objectType === 'CATALOG' && object.status === 'NEW');
+        if (catalog && !next.initializedCatalogIds?.includes(catalog.objectId)) {
+          const role = createBlankRole(crypto.randomUUID(), objects, environment, catalog.objectId);
+          next.roleAssignments.push(role);
+          next.initializedCatalogIds = [...(next.initializedCatalogIds ?? []), catalog.objectId];
+          onAutomaticRole(role.id);
+        }
+        onChange(next);
         setLoaded({ objects, metadata });
       } catch (cause) {
         if (active) setError(cause instanceof Error ? cause.message : 'Unable to load permissions.');
@@ -42,7 +51,7 @@ export function usePermissions(
     return () => { active = false; };
     // Role edits do not trigger rediscovery. A scope/environment change remounts the editor.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [objectsData, environment, service, onChange, attempt]);
+  }, [objectsData, environment, service, onChange, onAutomaticRole, attempt]);
   const retry = useCallback(() => setAttempt((value) => value + 1), []);
   return { loaded, error, loading, retry };
 }

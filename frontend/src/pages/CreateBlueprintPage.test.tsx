@@ -37,6 +37,10 @@ async function enterPermissions(overrides: Partial<PermissionsService> = {}, app
 async function addRole() {
   await userEvent.click(screen.getByRole('button', { name: '+ Create Role Assignment' }));
   await userEvent.click(screen.getByRole('button', { name: 'Add role assignment' }));
+  const scopes = screen.getAllByRole('combobox', { name: 'Role scope *' });
+  await userEvent.selectOptions(scopes[scopes.length - 1], 'c1');
+  const types = screen.getAllByRole('combobox', { name: 'Role Type *' });
+  await userEvent.selectOptions(types[types.length - 1], 'user');
 }
 
 describe('wizard permissions integration', () => {

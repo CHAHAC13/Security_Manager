@@ -31,9 +31,22 @@ function renderEditor(overrides: Partial<PermissionsService> = {}, initial = INI
 async function addRole() {
   await userEvent.click(await screen.findByRole('button', { name: '+ Create Role Assignment' }));
   await userEvent.click(screen.getByRole('button', { name: 'Add role assignment' }));
+  const scopes = screen.getAllByRole('combobox', { name: 'Role scope *' });
+  await userEvent.selectOptions(scopes[scopes.length - 1], 'c1');
+  const types = screen.getAllByRole('combobox', { name: 'Role Type *' });
+  await userEvent.selectOptions(types[types.length - 1], 'user');
 }
 
 describe('role assignment cards', () => {
+  it('creates a new role with an empty name and role type', async () => {
+    renderEditor();
+    await userEvent.click(await screen.findByRole('button', { name: '+ Create Role Assignment' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Add role assignment' }));
+    expect(screen.getByLabelText<HTMLInputElement>('Role Name *').value).toBe('');
+    expect(screen.getByLabelText<HTMLSelectElement>('Role Type *').value).toBe('');
+    expect(screen.getByLabelText<HTMLSelectElement>('Role scope *').value).toBe('');
+    expect(screen.getByPlaceholderText('dbx-<env>-gpd-<role>-<catalog>')).toBeTruthy();
+  });
   it('validates a read-only long existing name and permits removing its final grant', async () => {
     const selected = [{ ...objects[0], objectName: 'gpdip_iconfirecrest_share_prod' }];
     const roles = await createMockPermissionsService().getExistingRolesForObjects(selected, 'dev');
@@ -123,9 +136,11 @@ describe('role assignment cards', () => {
     renderEditor();
     await addRole();
     await userEvent.selectOptions(screen.getByLabelText('Level *'), 'SCHEMA');
+    await userEvent.selectOptions(screen.getByLabelText('Role scope *'), 's1');
     expect(screen.queryByRole('checkbox', { name: 'odx: USE CATALOG' })).toBeNull();
     expect(screen.getByLabelText<HTMLInputElement>('Role Name *').value).toBe('dbx-dev-gpd-user-odx-cdm');
     await userEvent.selectOptions(screen.getByLabelText('Level *'), 'OBJECT');
+    await userEvent.selectOptions(screen.getByLabelText('Role scope *'), 't1');
     expect(screen.queryByRole('checkbox', { name: 'cdm: USE SCHEMA' })).toBeNull();
     expect(screen.getByRole('checkbox', { name: 'study: SELECT' })).toBeTruthy();
     expect(screen.queryByRole('checkbox', { name: 'contacts: SELECT' })).toBeNull();
@@ -223,7 +238,7 @@ describe('role assignment cards', () => {
     expect(screen.getAllByRole('button', { name: 'Create role for this object' })).toHaveLength(1);
     await userEvent.click(within(warning).getByRole('button', { name: 'Create role for this object' }));
     await userEvent.click(screen.getByRole('button', { name: 'Add role assignment' }));
-    expect(editor.data().roleAssignments[0]).toMatchObject({ level: 'OBJECT', scopeObjectId: 'v1', roleName: 'dbx-dev-gpd-user-odx-contacts' });
+    expect(editor.data().roleAssignments[0]).toMatchObject({ level: 'OBJECT', scopeObjectId: 'v1', roleName: '', roleTypeCode: '' });
     expect(screen.queryByRole('note', { name: 'No role coverage: contacts' })).toBeNull();
     expect(screen.getByRole('checkbox', { name: 'contacts: SELECT' })).toBeTruthy();
     expect(screen.queryByRole('checkbox', { name: 'study: SELECT' })).toBeNull();

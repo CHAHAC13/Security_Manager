@@ -87,6 +87,7 @@ export interface ProposedSchema {
 }
 
 export interface ProposedObject extends ObjectOption {
+  catalogId: string;
   source: 'new';
 }
 
@@ -206,6 +207,7 @@ export interface BlueprintPermissionsData {
   /** Discovery bookkeeping prevents removed roles from returning on every visit. */
   discoveredRoleIds: string[];
   discoveryEnvironment?: PermissionEnvironment;
+  initializedCatalogIds?: string[];
 }
 
 export const INITIAL_PERMISSIONS_DATA: BlueprintPermissionsData = {
