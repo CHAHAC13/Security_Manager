@@ -16,3 +16,8 @@ env:
   # Temporary: also print spans to logs to debug missing traces in otel_spans.
   - name: OTEL_TRACES_EXPORTER
     value: "otlp,console"
+  # Sample every span regardless of the incoming traceparent sampled flag.
+  # The default parentbased_always_on drops spans when the upstream proxy
+  # forwards a not-sampled parent, leaving otel_spans empty.
+  - name: OTEL_TRACES_SAMPLER
+    value: "always_on"
