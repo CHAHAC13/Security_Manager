@@ -1,4 +1,4 @@
-import { ACCESS_MATRIX_DATA } from '@/data/mock-data';
+import { useAccessMatrix } from '@/hooks/useAccessMatrix';
 import { useAccessMatrixFilters } from '@/hooks/useAccessMatrixFilters';
 import { Pagination } from '@/components/ui/Pagination';
 import { AccessMatrixFilters } from './AccessMatrixFilters';
@@ -6,6 +6,7 @@ import { AccessMatrixTable } from './AccessMatrixTable';
 import { AccessMatrixToolbar } from './AccessMatrixToolbar';
 
 export function AccessMatrixPage() {
+  const { data, loading, error, refetch } = useAccessMatrix();
   const {
     filters,
     filterOptions,
@@ -16,7 +17,7 @@ export function AccessMatrixPage() {
     pageSize,
     setCurrentPage,
     updateFilter,
-  } = useAccessMatrixFilters(ACCESS_MATRIX_DATA);
+  } = useAccessMatrixFilters(data);
 
   // Placeholder handlers — wire up real logic when doing API integration
   const handleAddColumn = () => {
@@ -25,6 +26,28 @@ export function AccessMatrixPage() {
   const handleExportCsv = () => {
     /* TODO: trigger CSV download */
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <p className="text-sm text-slate-500">Loading access matrix…</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3">
+        <p className="text-sm text-red-600">Error: {error}</p>
+        <button
+          onClick={() => refetch()}
+          className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white hover:bg-slate-700"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   return (
     <>

@@ -1,4 +1,23 @@
 command:
   - "bash"
   - "-c"
-  - "cd frontend && npm install && npm run build && cd .. && python app.py"
+  - "pip install -r backend/requirements.txt && cd frontend && npm install && npm run build && cd .. && opentelemetry-instrument uvicorn app:app --host 0.0.0.0 --port ${DATABRICKS_APP_PORT:-8000}"
+
+env:
+  # Resolved from the SQL warehouse app resource with key "sql-warehouse".
+  # Used by the backend to read catalog tags from system.information_schema.catalog_tags.
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse
+  - name: CATALOG_TAG_FILTER
+    value: "gpdip,gpdip_dev,gpdip_stg,gpdip_prod"
+  # OpenTelemetry: export endpoint is injected by Databricks Apps; do not hardcode it.
+  - name: OTEL_SERVICE_NAME
+    value: "idp-security-manager"
+  # Temporary: also print spans to logs to debug missing traces in otel_spans.
+  - name: OTEL_TRACES_EXPORTER
+    value: "otlp,console"
+  # Sample every span regardless of the incoming traceparent sampled flag.
+  # The default parentbased_always_on drops spans when the upstream proxy
+  # forwards a not-sampled parent, leaving otel_spans empty.
+  - name: OTEL_TRACES_SAMPLER
+    value: "always_on"

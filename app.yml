@@ -1,4 +1,0 @@
-command:
-  - "bash"
-  - "-c"
-  - "cd frontend && npm install && npm run build && cd .. && python app.py"

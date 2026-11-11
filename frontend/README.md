@@ -1,5 +1,363 @@
 # React + TypeScript + Vite
 
+## Objects pagination
+
+Schema and object lists request five records at a time and show
+`Page X of Y` beside Previous/Next when there is more than one page.
+Totals come from the discovery API's `total_items` and `total_pages`, not the
+number of records loaded so far. Metadata is cached with each resource list;
+object totals follow the focused schema and schema totals follow the catalog.
+Page changes preserve selected schemas and objects and do not prefetch remaining
+pages. Proposed local definitions are not included in the API's page totals.
+The discovery API must return non-negative integer totals; invalid or missing
+totals use the existing discovery error/retry UI.
+Objects are fetched with
+`GET /api/v1/discovery/catalogs/{catalog_name}/schemas/{schema_name}/objects`.
+Catalog and schema path segments are URL-encoded; filters and pagination use
+`object_type`, `search`, `page`, and `page_size` query parameters.
+
+The catalog picker searches catalog **names only**, using
+`GET /api/v1/discovery/catalogs?search=...&search_by=name`.
+Matching is case-insensitive and runs on the backend before pagination, so it
+includes matching names beyond the initially loaded page. Shared catalog tags
+do not make unrelated names match. The existing 300 ms debounce, query-specific
+cache, and Load more catalogs control still apply. Clearing search restores the
+unfiltered list without changing the selected catalog or its selected resources.
+Load more keeps the picker open and appends results to the existing list. The
+button remains focusable while loading, but repeat clicks/keyboard activation
+are blocked until the request finishes. When the final page removes the button,
+focus returns to the search box without closing the picker. Catalog selection,
+Escape, outside clicks, and tabbing out still dismiss it.
+The backend's configured tag eligibility filter is unchanged; searching does not
+reveal catalogs excluded by that filter.
+
+New catalog, schema, and table/view definitions are local wizard proposals,
+not resources created in Databricks. Adding a catalog selects it; adding a
+schema selects and focuses it, and adding an object selects it. Names are checked
+case-insensitively against proposals in the same scope and against fresh
+Databricks catalog, schema, and table/view lists. Dedicated name-check endpoints
+return a boolean, bypass the discovery cache and do not reserve names. Catalog
+checks do not apply the picker's tag filter. Checks are limited to resources
+visible to the configured Databricks identity.
+Discovery failures prevent adding a proposal and are displayed for retry.
+Proposed parents are never sent to schema or object discovery.
+The existing-catalog picker is disabled while defining or using a proposed
+catalog; the proposal is displayed separately and can be removed. Proposed
+schemas and objects have their own Remove controls; existing resources do not.
+Removal requires confirmation. Removing a proposed catalog or schema also
+removes its proposed descendants; related permissions and roles scoped directly
+to removed resources, including their approvers, are removed from the wizard.
+Switching catalogs after configuring roles or approvers requires confirmation;
+on confirmation, the old catalog's assignments and approvers are cleared rather
+than transferred to the new catalog.
+When Permissions is first opened for a proposed catalog, a catalog-scoped role
+is added with a blank name and type. Returning to the step does not recreate a
+removed role. Regular new roles start with blank scope, type and name; selecting
+a scope and type still offers the existing generated name.
+
+## Blueprint Permissions (Step 3)
+
+The Permissions editor uses collapsible Role Assignment cards. Each single-line
+header shows the role name, New/Existing badge, level and role type, with grant/
+revoke counts only when privileges have changed. Cards start collapsed except
+newly created roles. Expand All / Collapse All controls change card visibility
+without changing assignments or grants.
+
+Each expanded card owns its Objects & Permissions tree, containing only that
+role's scope and descendants, with inline privilege checkboxes. Edits target
+exactly one role-ID/object-ID record. Different roles never share grants merely
+because they reference the same resource. There is no separate resource-first
+section or privilege dropdown.
+
+New roles retain editable level, scope, role type and role name controls.
+Existing identity is read-only text, with no disabled identity dropdowns or name
+counter. Removing an existing assignment uses "Remove from blueprint" and requires
+confirmation. Request Manager uses Yes/No radios inside each card; Form Type and
+Display Name appear only for Yes.
+
+The global creation button supports creating or searching existing roles. The
+only resource-specific creation shortcut appears in warnings for new leaf
+objects with no role coverage; it preselects that object's scope. Parent-scoped
+roles count as coverage. All selected schemas, including `information_schema`,
+and their selected descendants are included in discovery, role scopes and trees;
+there is currently no system-schema exclusion.
+Mock role names use the same environment/type/catalog/scope naming helper as new
+roles, without generated display-name suffixes.
+
+Validation expands invalid cards before focusing the first invalid field.
+Escape collapses the active card and returns focus to its header.
+
+The editor uses the existing wizard-owned state, shared footer, buttons and
+badges. The environment remains `dev` by default in wizard state; Setup does not
+display an environment selector.
+The wizard has six steps: Setup, Objects, Permissions, Approvers, Deployment,
+and Review & Submit. Deployment (Step 5) configures schedules and notifications.
+Review (Step 6) displays the shared deployment configuration; the remainder
+of Review and actual deployment execution are not implemented.
+The single-catalog Objects picker is unchanged.
+
+### Data flow and API integration
+
+- `src/types/blueprint.ts` defines role assignments, scoped object permissions,
+  immutable discovery baselines, Request Manager configuration and field errors.
+- Objects retains catalog/schema **metadata snapshots** beside its existing
+  selection IDs so Permissions does not re-fetch or re-select those objects.
+- `src/services/permissionsService.ts` exposes `PermissionsService`. The UI and
+  hook only depend on that interface. Its default binding is
+  `apiPermissionsService`, which reads actual grants through
+  `POST /api/v1/discovery/privileges`. `createMockPermissionsService` remains
+  available for isolated component tests; API failures never fall back to it.
+- `getSelectedObjects` adapts wizard selections into a hierarchy with
+  catalog-qualified stable IDs. `getPermissionMetadata` returns privilege
+  options, configurable role types, and form types together. Those options still
+  come from local configuration in `src/data/permissionsData.ts`; the backend
+  has no permission-metadata endpoint.
+- Discovery sends existing selected catalogs, schemas, tables and views as
+  `{ securable_type, full_name }`, using names from the selected hierarchy rather
+  than opaque UI IDs. Materialized views use `VIEW`. Proposed resources are not
+  sent, empty selections make no request, and selections over the backend's
+  100-item limit are split into batches. An error in any batch fails the entire
+  load through the existing error/retry UI.
+- Requests use `include_inherited: true` for every selected existing resource.
+  Principal names, privilege codes such as `USE_CATALOG`, inheritance flags and
+  source fields are retained exactly as returned, including nulls and response
+  order. Each resource stores read-only `discoveredAssignments` snapshots with
+  all response fields internally, separate from local edits. The application
+  displays simple permission controls and inheritance details, not raw JSON
+  panels. Empty and inherited-only assignments are not dropped.
+- Only privileges with `inherited: false` populate the direct-grant baseline
+  and editable checkboxes. Inherited privileges are displayed separately as
+  read-only entries, with the exact catalog/schema/metastore source supplied
+  by the API, including multiple sources for the same privilege. No inheritance
+  is inferred from catalog checkboxes or copied to child grant selections.
+  API-discovered direct grants remain valid on that exact principal/resource
+  even when the local option list is incomplete; keeping them never requires
+  deleting grants. Local additional-grant options use API-style underscore codes.
+- Each returned principal becomes one existing assignment per selected catalog,
+  grouping its grants across the selected hierarchy. Principal names are
+  preserved, not generated or classified by naming conventions. Catalog scope
+  is an editor grouping, not a claim about a principal's actual Databricks role
+  level. The endpoint can return groups, users and service principals without
+  distinguishing them; missing role types are omitted from card headers without
+  a placeholder or separator. The Role Type selector remains available for new
+  roles. Request Manager fields start unset because discovery provides no
+  such metadata; they are local editor values, not authoritative server settings.
+- Search filters principals returned for the selected resources, not all roles
+  in the workspace. The backend has no environment parameter: the configured
+  backend workspace determines the source, while Setup environment partitions
+  local discovery IDs. It does not filter grants by role-name prefix.
+- `validateRoleName` is called for new roles before Next; existing names are
+  read-only. No name-validation or draft-write endpoint exists yet, so the API
+  adapter explicitly rejects those operations with visible errors. Next remains
+  available for valid existing assignments, but new-role validation cannot be
+  completed. Edits remain in wizard state across Back/Next navigation; they are
+  not persisted and no grants are applied. The mock service used in tests still
+  checks draft serializability only. Saves from other steps first
+  reconcile permissions against the current scope/environment, so saving
+  directly from Objects cannot retain grants for deselected objects.
+- Future name-validation, draft-write and grant-application APIs should be wired
+  through `PermissionsService`, mapping their confirmed DTOs inside the adapter.
+  The current discovery POST only reads privileges and is never used to save
+  changes. Strip discovery bookkeeping and derive grant/revoke operations as
+  needed by the future write contract.
+- Return `{ valid: false, message }` for name conflicts. Throw
+  `PermissionsValidationError` with role-ID-keyed field errors for server
+  validation, or an `Error` for transport/service failures. Both are surfaced in
+  the editor; save failures remain retryable.
+- Production must independently authorize and validate scope, role identity,
+  privileges, name uniqueness and draft writes, and obtain authoritative
+  baselines. Client validation is not a security boundary.
+
+### Behavior and scope
+
+`src/lib/permissions.ts` owns naming, level/scope selection, validation,
+grant/revoke and Request Manager diffs, and ID-based reconciliation. Catalog
+roles cover their selected subtree, schema roles their selected subtree, and
+object roles their selected leaf. Existing identity (level/scope/type/name) is
+read-only; privileges and Request Manager values remain editable.
+
+New-role names regenerate until manually edited. Recommendations are never
+silently truncated: overlength names must be shortened by the user while
+retaining the environment/type prefix and the level's scope-token structure.
+Catalog/schema/dataset tokens are normalized to lowercase hyphenated text.
+Existing role names are not renamed to match a new recommendation, but still
+must be nonempty and unique in the blueprint. The 32-character creation limit
+applies only to new roles, not read-only existing identities. New roles require
+at least one privilege; existing roles may have no remaining privileges so all
+original grants can be revoked without deleting the role.
+
+Reconciliation preserves edits on retained objects, removes deselected objects
+from active assignments, and discovers newly applicable roles without duplicating
+or resurrecting deliberately removed roles. New descendants of an existing role
+receive their discovered originals. Reloaded resource snapshots and baselines
+are refreshed from discovery, then only the user's prior explicit direct-grant
+additions/removals are reapplied. Upstream changes and newly returned inheritance
+do not manufacture local grant/revoke operations. Older space-separated wizard
+labels are migrated to raw API codes without creating changes.
+An environment change replaces existing
+role discovery while retaining new-role edits. A new role whose scope disappears
+moves to the first available scope of its level with no carried-over grants for
+removed objects; with no scope available it remains incomplete and Next is blocked.
+Removing an existing role assignment only excludes it from this blueprint; it
+does not delete the Databricks role.
+
+Inheritance displays use only the API records for the **same principal/resource**,
+not parent-grant guesses. Editing a catalog does not change any inherited
+snapshot or child checkbox. Inherited records never participate in grant/revoke
+diffs. Opening/collapsing cards, searching and revisiting Permissions do not
+create changes; only explicit edits to direct-grant checkboxes do.
+Request Manager No clears its
+inactive form/display fields while retaining original settings for change
+tracking. Discovered original privileges remain checked on initial load and can
+be kept, unchecked, or restored without an unsupported-privilege error. They do
+not become globally available grant options for other principals or resources.
+Arbitrary new privileges outside the local options and that resource's baseline
+are still rejected. "Pending addition" / "Pending removal" labels describe only
+local differences; they do not mean changes have been applied to Databricks.
+A resource with changed existing grants offers Restore original permissions to
+undo local changes, including removals made before the validation fix.
+
+The permissions hierarchy/utilities support multiple catalogs and FUNCTION /
+EXECUTE data. The existing Objects UI still selects one catalog and offers its
+existing table/view/materialized-view kinds; materialized views use VIEW
+privileges. Expanding discovery/Objects to other resource kinds or simultaneous
+catalog selection is outside this step's agreed scope.
+
+### Validation and tests
+
+```powershell
+npm.cmd test
+npm.cmd run typecheck
+npm.cmd run lint
+npm.cmd run build
+```
+
+Vitest and React Testing Library cover utility boundaries, the permissions
+components, and wizard navigation/draft integration. API adapter tests cover
+exact route/body contracts, fully qualified names, direct-grant baselines,
+principal grouping, batching at 100 resources, malformed responses, unsupported
+operations and transport errors. Discovery integration tests exercise real
+frontend adapters against mocked HTTP responses, including error/retry behavior.
+Other wizard integration tests
+isolate the Objects page's external discovery dependency; browser smoke testing
+can use deterministic discovery responses against the actual Objects UI.
+
+Known unrelated repository-wide validation blockers at implementation time:
+`BlueprintEditorPage.tsx` passes an un-narrowed string to its environment filter;
+`useAccessMatrix.ts` fails `react-hooks/set-state-in-effect`. Neither is part of
+the Permissions change. The production Vite build and the changed-file ESLint
+check pass independently.
+
+## Blueprint Approvers (Step 4)
+
+Assigns at least one Technical/System Owner and one Domain/Business Owner to
+new roles and existing roles with grant/revoke or active Request Manager changes.
+Unchanged discovered groups are excluded. Roles are read from wizard state
+(`permissionsData.roleAssignments`) and never refetched; approvers are stored in
+`BlueprintFormData.approvers` as `{ approvers: { [roleId]: { technical, business } }, prefilledRoleIds }`.
+
+| File | Responsibility |
+|---|---|
+| `src/config/approverConfig.ts` | Fixed `TECHNICAL_OWNERS`, `MAX_APPROVERS_PER_TYPE`, `ALLOW_SAME_PERSON_BOTH_TYPES`, debounce/min chars, `USE_MOCK`, mock latency/error toggle, endpoint placeholders. |
+| `src/services/approverService.ts` | `ApproverService` contract + request/response types, mock implementation, HTTP adapter (`apiClient`). |
+| `src/data/approverData.ts` | Mock directory users, known role approvers and sample roles. |
+| `src/lib/approvers.ts` | Pure validation, add/remove, Apply-to-All, reconcile/prefill, filter and scope helpers (unit-tested). |
+| `src/hooks/useApprovers.ts` | Prefills existing roles once, prunes removed roles, loads scope labels, loading/error/retry. |
+| `src/components/blueprint/BlueprintApproversForm.tsx` | Step orchestration: header/progress, toolbar, banner, table, modal, toast, empty state. |
+| `ApproverTable`, `ApproverCell`, `UserPickerTypeahead`, `ApplyToAllModal`, `ValidationBanner` | Reusable building blocks in `src/components/blueprint/`. |
+
+### Switching to the real API
+
+1. Implement backend endpoints matching the types in `approverService.ts`:
+   `GET /api/directory/users?q=`, `GET /api/blueprints/{id}/approvers?roleIds=`,
+   `PUT /api/blueprints/{id}/approvers` (body `{ approvers }`, response `{ success, savedAt }`).
+2. Set `VITE_APPROVERS_USE_MOCK=false` (or change `USE_MOCK`). No UI changes needed.
+3. Replace the wizard's client-generated `draft-<uuid>` blueprint id with the id issued by the backend.
+
+Mock failures can be simulated with `VITE_APPROVERS_MOCK_ERROR=true` or
+`setMockApproverError(true)`.
+
+### Behaviour notes
+
+- Next ("Next: Deployment") is disabled until every role requiring approval is complete; Save Draft is always allowed.
+- Approval scope uses `rolesRequiringApproval` and the existing permission/Request Manager diff helpers. Reverted edits and changes to inactive Request Manager fields do not require approval. New roles always require approval.
+- Prefill lookups, counters, validation, bulk actions and saved approver payloads include only roles requiring approval. Approvers for reverted/removed roles are pruned without removing those roles from Permissions. With only unchanged roles, no approver lookup is made and "No changes require approval" allows Next to Deployment. A blueprint with no roles still links back to Permissions.
+- Step 5 configures Deployment with Back, Save Draft and Next. Submit appears only on Step 6; selecting Immediate never performs a deployment.
+- Existing-role approvers are prefilled once per role (`prefilledRoleIds`), so user removals are not re-filled on revisit.
+- Technical owners (new and existing roles, including bulk assignment) use non-searchable checkboxes for `Jisun.Yoon@Pfizer.com` and `Sreeram.Koneru@pfizer.com`. Select one or both; directory search cannot add other technical owners.
+- Business owners for existing roles come from `getRoleApprovers` and remain editable/searchable. New roles start empty and use `searchDirectoryUsers` to select business owners. Both operations already have mock and HTTP adapters; backend endpoints are still pending.
+- Each owner column has its own Copy to all action. Technical-only copying never changes business owners (and vice versa), even in Replace mode or when role filters are active.
+- Technical owners display only the two email checkboxes, with no selected-name chips above them. API identities are matched by case-insensitive email, independently of directory IDs. Obsolete technical owners are removed from loaded drafts and API prefill; business owners are unchanged. If no valid technical owner remains, the user must select one before Next. The backend must enforce the same two-person allowlist.
+- Apply to All supports Add/Replace and "Only roles missing approvers" (fills only empty columns); replacing that would remove approvers requires confirmation.
+- Same person in both columns is a warning when `ALLOW_SAME_PERSON_BOTH_TYPES` is true, otherwise a blocking error.
+- UI validation is not a security boundary; the backend must re-validate approvers, reject service accounts and enforce self-approval rules.
+
+## Blueprint Deployment (Step 5)
+
+`BlueprintDeploymentForm` reuses the wizard layout, existing card/input styling,
+shared footer and stepper. It configures exactly three independent rows (Dev,
+Stg, Prd), each with Immediate or Scheduled strategy, plus requestor/approver
+success/failure notification flags. All rows default to Immediate, notifications
+default off, and no example dates are preselected. Immediate means after all
+required approvals, not immediately on selecting an option.
+
+`src/lib/deployment.ts` centralizes environment labels, initial state, immutable
+updates, local-to-UTC conversion, validation and summary formatting.
+`BlueprintFormData.deployment` is the single source of truth in wizard-owned state:
+
+```ts
+{
+  environments: {
+    dev: { strategy: 'immediate', scheduledDateTime: '', scheduledAt: null },
+    stg: { strategy: 'scheduled', scheduledDateTime: '<local YYYY-MM-DDTHH:mm>', scheduledAt: '<UTC ISO timestamp>' },
+    prd: { strategy: 'scheduled', scheduledDateTime: '<local YYYY-MM-DDTHH:mm>', scheduledAt: '<UTC ISO timestamp>' },
+  },
+  timeZone: '<browser IANA timezone>',
+  notifyRequestor: false,
+  notifyApprovers: false,
+}
+```
+
+- Next validates all strategies, requires date/time for Scheduled, and focuses
+  the first invalid field. Errors are displayed beside the affected row/field.
+  Switching to Immediate clears both local and UTC schedule values.
+- Prd cannot precede either Dev or Stg. Immediate Prd is invalid when either
+  lower environment is Scheduled. Scheduled Prd must be at or after both
+  lower scheduled instants. Equal times are allowed; no separate Dev-before-Stg
+  ordering is imposed. Validation never changes dates.
+- Inputs use the user's local timezone captured when the wizard opens.
+  Both wall-clock input and UTC instant are retained, so incomplete drafts
+  remain editable and the future backend does not need to guess timezone.
+  Invalid calendar/DST-skipped times are rejected. Repeated DST times use the
+  browser's earlier occurrence; the resulting UTC timestamp is retained.
+  Past-date and approval-after-schedule handling need backend policy; this step
+  does not invent a future-only rule.
+- Back/Next keeps schedules and notification flags. Save Draft includes the
+  full configuration, even if incomplete, in the existing
+  `PermissionsService.savePermissionsDraft(BlueprintFormData)` payload.
+  `DeploymentSummary` reads exactly that same state on Review, including
+  timezone and notification settings. Review has no duplicate schedule state.
+
+**Integration boundary:** No approval processor, deployment executor, notification
+sender or durable draft endpoint exists yet. The default permissions API adapter
+explicitly rejects draft writes with the existing visible error; its injectable
+mock only checks serialization and does not persist after leaving the wizard.
+This change extends that draft contract, not production persistence. Final Submit
+remains the pre-existing console-only placeholder, now including deployment data.
+
+The future execution backend must authorize and revalidate the configuration,
+wait for every required approval, enforce actual lower-environment completion
+before Production, and derive all deployments from one immutable approved
+blueprint version. It must track each environment's success/failure, logs,
+errors and timestamps independently and honor notification flags. Selecting
+Immediate, Next, Save Draft or Review does not execute deployment, send messages,
+or mark any environment/blueprint successful.
+
+Tests cover independent strategies, exact defaults, required/invalid schedules,
+UTC conversion (including an America/New_York DST run), Production order,
+notification toggles, retained Back/Next edits, partial and complete draft
+payloads, save failure/retry, and Review reading updated shared state.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:
