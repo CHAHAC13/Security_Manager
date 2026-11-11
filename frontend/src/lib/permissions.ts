@@ -60,7 +60,7 @@ export function refreshRole(
     const current = role.objectPermissions.find((permission) => permission.objectId === object.objectId);
     return {
       ...current,
-      objectId: object.objectId, objectName: object.objectName, objectType: object.objectType,
+      objectId: object.objectId, objectName: object.objectName, objectType: object.objectType, parentId: object.parentId,
       originalPermissions: current?.originalPermissions ?? [],
       permissions: current?.permissions ?? [],
     };

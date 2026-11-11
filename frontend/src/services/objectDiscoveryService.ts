@@ -201,6 +201,7 @@ export const apiObjectDiscoveryService: ObjectDiscoveryService = {
         id: item.full_name,
         name: item.name,
         schemaId: item.schema_name,
+        catalogId: catalogName,
         kind: item.object_type === 'MATERIALIZED_VIEW'
           ? 'materialized_view'
           : item.display_type === 'VIEW'
@@ -294,7 +295,7 @@ export const mockObjectDiscoveryService: ObjectDiscoveryService = {
     );
     const objects = MOCK_OBJECTS.filter(
       (object) => object.schemaId === schema?.id && (!request.kind || object.kind === request.kind),
-    );
+    ).map((object) => ({ ...object, catalogId }));
     return pageItems(objects, request);
   },
 };

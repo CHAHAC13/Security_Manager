@@ -12,7 +12,7 @@ export const BLUEPRINT_STEPS: BlueprintStepMeta[] = [
   { step: 3, label: 'Permissions' },
   { step: 4, label: 'Approvers' },
   { step: 5, label: 'Deployment' },
-  { step: 6, label: 'Review & Submit' },
+  { step: 6, label: 'Review' },
 ];
 
 /** Form data for Step 1: Blueprint Setup. */
@@ -68,6 +68,7 @@ export interface ObjectOption {
   id: string;
   name: string;
   schemaId: string;
+  catalogId?: string;
   kind: ObjectKind;
   status?: ValidationStatus;
   source?: 'existing' | 'new';
@@ -150,6 +151,7 @@ export interface ObjectPermission {
   objectId: string;
   objectName: string;
   objectType: PermissionObjectType;
+  parentId?: string | null;
   readonly originalPermissions: readonly string[];
   readonly discoveredAssignments?: readonly DiscoveredPermissionAssignment[];
   permissions: string[];
