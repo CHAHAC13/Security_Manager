@@ -7,6 +7,7 @@ from core.cache import discovery_cache
 from core.config import get_settings
 from routers.blueprint_discovery import router as blueprint_discovery_router
 from routers.access_matrix import router as access_matrix_router
+from routers.approvers import router as approvers_router
 
 
 @asynccontextmanager
@@ -36,6 +37,7 @@ app.add_middleware(
 
 app.include_router(blueprint_discovery_router)
 app.include_router(access_matrix_router)
+app.include_router(approvers_router)
 
 
 @app.get("/api/health", tags=["Health"])

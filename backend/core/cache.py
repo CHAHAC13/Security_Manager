@@ -1,9 +1,7 @@
 import asyncio
-import os
 from typing import Any
 
 from cachetools import TTLCache
-from dotenv import load_dotenv
 
 from .config import get_settings
 

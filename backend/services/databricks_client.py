@@ -1,4 +1,5 @@
 import asyncio
+import re
 from typing import Any, cast
 from urllib.parse import quote
 
@@ -6,6 +7,14 @@ import httpx
 from databricks.sdk.core import Config
 
 from core.config import Settings
+
+# Unity Catalog reports service principals by their application ID (a UUID).
+APPLICATION_ID_PATTERN = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+# Max application IDs combined into one SCIM "or" filter.
+SCIM_FILTER_BATCH_SIZE = 20
 
 class DatabricksApiError(Exception):
     def __init__(
@@ -306,3 +315,49 @@ class DatabricksUnityCatalogClient:
             seen_tokens.add(next_page_token)
             request_params["page_token"] = next_page_token
         return collected
+
+    async def get_service_principal_names(
+        self, application_ids: list[str]
+    ) -> dict[str, str]:
+        """
+        Return {application_id (lowercase): display_name} for service principals.
+        Uses the account-level SCIM API exposed on the workspace host, because
+        many service principals with grants are not assigned to this workspace.
+        IDs that are not valid UUIDs are ignored (never placed in the filter).
+        """
+        ids = sorted(
+            {
+                app_id.strip().lower()
+                for app_id in application_ids
+                if isinstance(app_id, str)
+                and APPLICATION_ID_PATTERN.match(app_id.strip())
+            }
+        )
+        names: dict[str, str] = {}
+        for start in range(0, len(ids), SCIM_FILTER_BATCH_SIZE):
+            chunk = ids[start : start + SCIM_FILTER_BATCH_SIZE]
+            payload = await self._get(
+                "/api/2.0/account/scim/v2/ServicePrincipals",
+                {
+                    "filter": " or ".join(
+                        f'applicationId eq "{app_id}"' for app_id in chunk
+                    ),
+                    "attributes": "applicationId,displayName",
+                    "count": len(chunk),
+                },
+            )
+            resources = payload.get("Resources") or []
+            if not isinstance(resources, list):
+                continue
+            for resource in resources:
+                if not isinstance(resource, dict):
+                    continue
+                app_id = resource.get("applicationId")
+                display_name = resource.get("displayName")
+                if (
+                    isinstance(app_id, str)
+                    and isinstance(display_name, str)
+                    and display_name.strip()
+                ):
+                    names[app_id.strip().lower()] = display_name.strip()
+        return names
