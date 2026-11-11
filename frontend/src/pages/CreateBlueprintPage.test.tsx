@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { CreateBlueprintPage } from './CreateBlueprintPage';
+import { HomePage } from './HomePage';
 import { createMockPermissionsService, PermissionsValidationError, type PermissionsService } from '@/services/permissionsService';
 import { createMockApproverService, type ApproverService } from '@/services/approverService';
 import type { BlueprintFormData, BlueprintObjectsData } from '@/types/blueprint';
@@ -26,7 +27,17 @@ async function enterPermissions(overrides: Partial<PermissionsService> = {}, app
     getExistingRolesForObjects: async () => [],
     ...overrides,
   };
-  render(<MemoryRouter><CreateBlueprintPage service={service} approverService={approverService} /></MemoryRouter>);
+  render(
+    <MemoryRouter initialEntries={['/blueprint-editor/create']}>
+      <Routes>
+        <Route path="/blueprint-editor/create" element={<CreateBlueprintPage service={service} approverService={approverService} />} />
+        <Route path="/" element={<HomePage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  await userEvent.type(screen.getByLabelText(/Blueprint Name/), 'Review test blueprint');
+  await userEvent.type(screen.getByLabelText(/Description/), 'Test blueprint description');
+  await userEvent.type(screen.getByLabelText(/Business Justification/), 'Required for the integration test');
   await userEvent.click(screen.getByRole('button', { name: 'Next' }));
   await userEvent.click(screen.getByRole('button', { name: 'Select test objects' }));
   await userEvent.click(screen.getByRole('button', { name: 'Next' }));
@@ -44,13 +55,17 @@ async function addRole() {
 }
 
 describe('wizard permissions integration', () => {
-  it('validates Deployment, preserves partial drafts and Back edits, and reviews the same saved configuration without executing', async () => {
+  it('validates Deployment, preserves draft state, supports review edits, and confirms submission', async () => {
     const baseline = {
       ...createRole('existing-group', objects, 'dev', 'user'),
       status: 'EXISTING' as const, mode: 'UPDATE_EXISTING' as const, roleName: 'existing-group',
     };
+    baseline.objectPermissions = baseline.objectPermissions.map((permission) => ({
+      ...permission,
+      originalPermissions: permission.objectId === 't1' ? ['SELECT'] : [],
+      permissions: permission.objectId === 't1' ? ['SELECT'] : [],
+    }));
     const save = vi.fn<PermissionsService['savePermissionsDraft']>().mockResolvedValue(undefined);
-    const submission = vi.spyOn(console, 'log').mockImplementation(() => {});
     await enterPermissions({
       getExistingRolesForObjects: async () => [baseline], savePermissionsDraft: save,
     }, createMockApproverService({ latencyMs: [0, 0], shouldFail: () => false }));
@@ -98,12 +113,34 @@ describe('wizard permissions integration', () => {
       },
     });
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
-    await screen.findByText('Review & Submit — coming soon');
-    const summary = screen.getByRole('region', { name: 'Deployment' });
-    expect(within(summary).getByText('Immediate')).toBeTruthy();
-    expect(within(summary).getAllByText(/Scheduled:/)).toHaveLength(2);
-    expect(within(summary).getByText(/Requestor: On; Approvers: On/)).toBeTruthy();
-    expect(submission).not.toHaveBeenCalled();
+    expect(await screen.findByRole('heading', { name: 'Review & Submit Blueprint' })).toBeTruthy();
+    expect(screen.getByText('Blueprint is ready for submission.')).toBeTruthy();
+    const summary = screen.getByRole('region', { name: 'Deployment Strategy' });
+    expect(within(summary).getAllByText('Immediate')).toHaveLength(1);
+    expect(within(summary).getAllByText('Scheduled')).toHaveLength(2);
+    expect(within(summary).getAllByText(/2030/)).toHaveLength(2);
+    expect(within(summary).getByText(/Notify Requestor on Deployment Success\/Failure:/)).toBeTruthy();
+    expect(within(summary).getByText(/Notify Approvers on Deployment Success\/Failure:/)).toBeTruthy();
+    expect(screen.queryByText('existing-group')).toBeNull();
+    expect(screen.getByText('Roles: 0')).toBeTruthy();
+    expect(screen.getByText('Permission Assignments: 0')).toBeTruthy();
+    expect(screen.getByText('No new or changed roles require approvers.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Edit Blueprint Details' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Edit Object Scope' })).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit Blueprint Details' }));
+    const nameInput = screen.getByLabelText(/Blueprint Name/);
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, 'Updated review test blueprint');
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByRole('button', { name: '+ Create Role Assignment' });
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText(/No changes require approval/);
+    await userEvent.click(screen.getByRole('button', { name: 'Next: Deployment' }));
+    await screen.findByRole('heading', { name: 'Deployment Strategy' });
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(await screen.findByRole('heading', { name: 'Review & Submit Blueprint' })).toBeTruthy();
+    expect(screen.getByText('Updated review test blueprint')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Save Draft' }));
     await waitFor(() => expect(save).toHaveBeenCalledTimes(4));
     expect(save.mock.calls[3][0].deployment).toEqual(saved);
@@ -113,14 +150,17 @@ describe('wizard permissions integration', () => {
     expect(screen.getByLabelText<HTMLInputElement>('Prd Date / Time').value).toBe('');
     await userEvent.selectOptions(screen.getByLabelText('Stg Deployment Strategy'), 'immediate');
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
-    await screen.findByRole('region', { name: 'Deployment' });
-    expect(within(screen.getByRole('region', { name: 'Deployment' })).getAllByText('Immediate')).toHaveLength(3);
-    await userEvent.click(screen.getByRole('button', { name: 'Submit' }));
-    expect(submission).toHaveBeenCalledWith('Blueprint submitted:', expect.objectContaining({
-      deploymentData: expect.objectContaining({
-        environments: createDeploymentData().environments, notifyRequestor: true, notifyApprovers: true,
-      }),
-    }));
+    expect(await screen.findByRole('heading', { name: 'Review & Submit Blueprint' })).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Deployment Strategy' })).getAllByText('Immediate')).toHaveLength(3);
+    await userEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
+    expect(await screen.findByRole('dialog', { name: 'Submit Blueprint for Approval?' })).toBeTruthy();
+    await userEvent.click(within(screen.getByRole('dialog', { name: 'Submit Blueprint for Approval?' })).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Submit Blueprint for Approval?' })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
+    const confirmation = screen.getByRole('dialog', { name: 'Submit Blueprint for Approval?' });
+    await userEvent.click(within(confirmation).getByRole('button', { name: 'Submit for Approval' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Submit Blueprint for Approval?' })).toBeNull());
+    expect(await screen.findByText('Blueprint submitted successfully. Status: Pending Approval.')).toBeTruthy();
   }, 15000);
 
   it('lets unchanged roles continue to Deployment and removes approval data when edits are reverted', async () => {
@@ -182,7 +222,7 @@ describe('wizard permissions integration', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect(await screen.findByRole('heading', { name: 'Assign Approvers' })).toBeTruthy();
     expect(validate).toHaveBeenCalledOnce();
-  });
+  }, 15000);
 
   it('saves incomplete drafts, sends complete wizard state and shows saving/saved states', async () => {
     let finish!: () => void;
@@ -313,12 +353,12 @@ describe('wizard permissions integration', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save Draft' }));
     await waitFor(() => expect(saveApprovers).toHaveBeenCalledTimes(3));
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
-    expect(await screen.findByText('Review & Submit — coming soon')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Review & Submit Blueprint' })).toBeTruthy();
     expect(screen.getByText(/Step 6 of 6/)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Submit' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Submit for Approval' })).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(await screen.findByRole('heading', { name: 'Deployment Strategy' })).toBeTruthy();
-  });
+  }, 15000);
 
   it('renders server save errors next to role fields', async () => {
     await enterPermissions({ savePermissionsDraft: async (payload) => {

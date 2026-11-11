@@ -58,7 +58,7 @@ export function BlueprintFooter({
           {saving ? 'Saving...' : 'Save Draft'}
         </Button>
         <Button variant="primary" onClick={onNext} disabled={busy || nextDisabled}>
-          <span>{isLastStep ? 'Submit' : nextLabel ?? 'Next'}</span>
+          <span>{isLastStep ? nextLabel ?? 'Submit' : nextLabel ?? 'Next'}</span>
           {!isLastStep && <ArrowRight className="w-3.5 h-3.5 ml-1.5" />}
         </Button>
       </div>

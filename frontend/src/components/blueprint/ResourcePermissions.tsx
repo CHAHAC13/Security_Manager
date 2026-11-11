@@ -64,7 +64,7 @@ export function ResourcePermissions({ objects, role, metadata, onChange }: Props
               <input type="checkbox" aria-label={`${object.objectName}: ${privilege}`} checked={checked} disabled={!allowed && !checked}
                 onChange={(event) => {
                   const current = permission ?? {
-                    objectId: object.objectId, objectName: object.objectName, objectType: object.objectType,
+                    objectId: object.objectId, objectName: object.objectName, objectType: object.objectType, parentId: object.parentId,
                     originalPermissions: [], permissions: [],
                   };
                   const updated = {

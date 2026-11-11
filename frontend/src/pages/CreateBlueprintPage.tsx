@@ -7,16 +7,17 @@ import { BlueprintObjectsForm } from '@/components/blueprint/BlueprintObjectsFor
 import { BlueprintPermissionsForm, type PermissionsFormHandle } from '@/components/blueprint/BlueprintPermissionsForm';
 import { BlueprintApproversForm } from '@/components/blueprint/BlueprintApproversForm';
 import { BlueprintDeploymentForm, type DeploymentFormHandle } from '@/components/blueprint/BlueprintDeploymentForm';
-import { DeploymentSummary } from '@/components/blueprint/DeploymentSummary';
+import { BlueprintReview } from '@/components/blueprint/BlueprintReview';
 import { Toast } from '@/components/ui/Toast';
 import { permissionsService, PermissionsValidationError, type PermissionsService } from '@/services/permissionsService';
 import { approverService as defaultApproverService, type ApproverService } from '@/services/approverService';
 import { reconcilePermissions, rolesRequiringApproval } from '@/lib/permissions';
 import { reconcileApprovers } from '@/lib/approvers';
 import { createDeploymentData } from '@/lib/deployment';
+import { getBlueprintReviewIssues } from '@/lib/blueprintReview';
 import { BLUEPRINT_STEPS, INITIAL_SETUP_DATA, INITIAL_OBJECTS_DATA, INITIAL_PERMISSIONS_DATA, INITIAL_APPROVERS_DATA } from '@/types/blueprint';
 import type {
-  BlueprintStep, BlueprintSetupData, BlueprintObjectsData, BlueprintPermissionsData, BlueprintApproversData, BlueprintDeploymentData,
+  BlueprintStep, BlueprintSetupData, BlueprintObjectsData, BlueprintPermissionsData, BlueprintApproversData, BlueprintDeploymentData, BlueprintFormData,
 } from '@/types/blueprint';
 
 /** Step subtitle descriptions shown in the page header. */
@@ -64,6 +65,7 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
   const [working, setWorking] = useState(false);
   const [checkingObjects, setCheckingObjects] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [confirmingSubmission, setConfirmingSubmission] = useState(false);
   const [draftFeedback, setDraftFeedback] = useState<{ error: boolean; message: string } | null>(null);
   const handlePermissionsChange = useCallback((value: BlueprintPermissionsData) => {
     setPermissionsData(value);
@@ -125,6 +127,14 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
     if (actionInProgress.current) return;
     if (currentStep === 4 && !approversReady) return;
     if (currentStep === 5 && !deploymentRef.current?.validate()) return;
+    if (currentStep === 6) {
+      if (getBlueprintReviewIssues({
+        setup: setupData, objects: objectsData, permissions: permissionsData,
+        approvers: approversData, deployment: deploymentData,
+      }).length) return;
+      setConfirmingSubmission(true);
+      return;
+    }
     if (currentStep === 3) {
       if (!permissionsReady) return;
       actionInProgress.current = true;
@@ -136,12 +146,7 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
         setWorking(false);
       }
     }
-    if (currentStep < BLUEPRINT_STEPS.length) {
-      setCurrentStep((prev) => (prev + 1) as BlueprintStep);
-    } else {
-      // Final submit — will call backend once available
-      console.log('Blueprint submitted:', { setupData, objectsData, permissionsData, approversData, deploymentData });
-    }
+    if (currentStep < BLUEPRINT_STEPS.length) setCurrentStep((prev) => (prev + 1) as BlueprintStep);
   }, [currentStep, setupData, objectsData, permissionsData, approversData, deploymentData, permissionsReady, approversReady]);
 
   const handleBack = useCallback(() => {
@@ -153,6 +158,35 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
   const handleCancel = useCallback(() => {
     navigate('/');
   }, [navigate]);
+
+  const handleSubmitForApproval = useCallback(async () => {
+    if (actionInProgress.current || currentStep !== 6) return;
+    const blueprint: BlueprintFormData = {
+      setup: setupData, objects: objectsData, permissions: permissionsData,
+      approvers: approversData, deployment: deploymentData,
+    };
+    if (getBlueprintReviewIssues(blueprint).length) return;
+    actionInProgress.current = true;
+    setWorking(true);
+    setConfirmingSubmission(false);
+    setDraftFeedback(null);
+    try {
+      // Mock boundary for the future submission API; no approval service is available yet.
+      await Promise.resolve(blueprint);
+      navigate('/', {
+        state: {
+          submissionNotice: 'Blueprint submitted successfully.',
+          blueprintStatus: 'Pending Approval',
+        },
+      });
+    } catch (cause) {
+      setConfirmingSubmission(false);
+      setDraftFeedback({ error: true, message: cause instanceof Error ? cause.message : 'Unable to submit blueprint. Try again.' });
+    } finally {
+      actionInProgress.current = false;
+      setWorking(false);
+    }
+  }, [currentStep, setupData, objectsData, permissionsData, approversData, deploymentData, navigate]);
 
   const handleSaveDraft = useCallback(async () => {
     if (actionInProgress.current) return;
@@ -200,11 +234,12 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-6 border-b border-slate-200">
         <div>
           <h1 className="text-xl font-bold text-slate-900 tracking-tight">
-            {currentStep === 5 ? 'Deployment Strategy' : 'Create Security Blueprint'}
+            {currentStep === 5 ? 'Deployment Strategy' : currentStep === 6 ? 'Review & Submit Blueprint' : 'Create Security Blueprint'}
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Step {currentStep} of {BLUEPRINT_STEPS.length}{currentStep === 5 ? ': ' : ' — '}{STEP_LABELS[currentStep]}.{' '}
-            {STEP_DESCRIPTIONS[currentStep]}
+            {currentStep === 6
+              ? `Step 6 of ${BLUEPRINT_STEPS.length} — Review. Review all blueprint configuration details before submitting for approval.`
+              : `Step ${currentStep} of ${BLUEPRINT_STEPS.length}${currentStep === 5 ? ': ' : ' — '}${STEP_LABELS[currentStep]}. ${STEP_DESCRIPTIONS[currentStep]}`}
           </p>
         </div>
       </div>
@@ -252,10 +287,14 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
         )}
 
         {currentStep === 6 && (
-          <div className="space-y-5">
-            <Placeholder label="Review & Submit" />
-            <DeploymentSummary data={deploymentData} />
-          </div>
+          <BlueprintReview
+            data={{ setup: setupData, objects: objectsData, permissions: permissionsData, approvers: approversData, deployment: deploymentData }}
+            confirmingSubmission={confirmingSubmission}
+            submitting={working}
+            onEdit={setCurrentStep}
+            onCancelSubmit={() => setConfirmingSubmission(false)}
+            onSubmit={handleSubmitForApproval}
+          />
         )}
       </fieldset>
 
@@ -274,19 +313,14 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
         onSaveDraft={handleSaveDraft}
         busy={saving || working || checkingObjects}
         saving={saving}
-        nextDisabled={(currentStep === 3 && !permissionsReady) || (currentStep === 4 && !approversReady)}
-        nextLabel={currentStep === 4 ? 'Next: Deployment' : undefined}
+        nextDisabled={(currentStep === 3 && !permissionsReady) || (currentStep === 4 && !approversReady)
+          || (currentStep === 6 && getBlueprintReviewIssues({
+            setup: setupData, objects: objectsData, permissions: permissionsData,
+            approvers: approversData, deployment: deploymentData,
+          }).length > 0)}
+        nextLabel={currentStep === 4 ? 'Next: Deployment' : currentStep === 6 ? 'Submit for Approval' : undefined}
         saveDisabled={currentStep === 3 && !permissionsReady}
       />
-    </div>
-  );
-}
-
-/** Temporary placeholder for steps that are not yet implemented. */
-function Placeholder({ label }: { label: string }) {
-  return (
-    <div className="flex items-center justify-center h-48 bg-white rounded-xl border border-dashed border-slate-300">
-      <p className="text-sm text-slate-400">{label} — coming soon</p>
     </div>
   );
 }
