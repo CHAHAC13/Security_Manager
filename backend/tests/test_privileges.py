@@ -398,3 +398,86 @@ class TestPrivilegesEndpoint:
         resp = client.post(PRIVILEGES_URL, json=_body(("VIEW", VIEW), ("TABLE", TABLE)))
         types = {i["full_name"]: i["securable_type"] for i in resp.json()}
         assert types == {VIEW: "VIEW", TABLE: "TABLE"}
+
+
+# ---------------------------------------------------------------------------
+# Service principal display-name resolution
+# ---------------------------------------------------------------------------
+
+SP_KNOWN = "2c33bc5a-fede-4089-97ec-b579da4ff453"
+SP_UNKNOWN = "f40ba487-9cf2-4592-b303-96cc1e9751bb"
+
+
+async def _fake_sp_assignments(
+    securable_type: str, full_name: str, effective: bool
+) -> list[dict[str, Any]]:
+    return [
+        {"principal": "grp-readers", "privileges": [{"privilege": "SELECT"}]},
+        {"principal": SP_KNOWN, "privileges": [{"privilege": "USE_CATALOG"}]},
+        {"principal": SP_UNKNOWN, "privileges": [{"privilege": "BROWSE"}]},
+    ]
+
+
+class TestPrincipalDisplayNames:
+    def _post(self, names: Any) -> tuple[Any, AsyncMock]:
+        with patch.object(
+            DatabricksUnityCatalogClient, "get_privilege_assignments",
+            new_callable=AsyncMock, side_effect=_fake_sp_assignments,
+        ), patch.object(
+            DatabricksUnityCatalogClient, "get_service_principal_names",
+            new_callable=AsyncMock,
+            **({"side_effect": names} if isinstance(names, Exception) else {"return_value": names}),
+        ) as lookup:
+            resp = TestClient(_build_test_app(_make_settings())).post(
+                PRIVILEGES_URL, json=_body(("CATALOG", CATALOG))
+            )
+        return resp, lookup
+
+    def test_service_principal_ids_are_resolved(self) -> None:
+        resp, lookup = self._post({SP_KNOWN: "svc-security-manager"})
+        assert resp.status_code == 200
+        rows = {i["principal"]: i["principal_display_name"] for i in resp.json()}
+        assert rows == {
+            "grp-readers": "grp-readers",           # names pass through unchanged
+            SP_KNOWN: "svc-security-manager",       # resolved
+            SP_UNKNOWN: SP_UNKNOWN,                 # not found -> raw id
+        }
+        # Only UUID principals are looked up, in a single batched call.
+        lookup.assert_awaited_once()
+        assert sorted(lookup.await_args.args[0]) == sorted([SP_KNOWN, SP_UNKNOWN])
+
+    def test_rows_sorted_by_display_name(self) -> None:
+        resp, _ = self._post({SP_KNOWN: "a-first", SP_UNKNOWN: "z-last"})
+        assert [i["principal_display_name"] for i in resp.json()] == [
+            "a-first", "grp-readers", "z-last",
+        ]
+
+    def test_lookup_results_are_cached(self) -> None:
+        self._post({SP_KNOWN: "svc-security-manager"})
+        resp, lookup = self._post({})
+        lookup.assert_not_awaited()  # both ids (found and not found) cached
+        rows = {i["principal"]: i["principal_display_name"] for i in resp.json()}
+        assert rows[SP_KNOWN] == "svc-security-manager"
+        assert rows[SP_UNKNOWN] == SP_UNKNOWN
+
+    def test_lookup_failure_falls_back_to_raw_id(self) -> None:
+        resp, _ = self._post(DatabricksApiError(403, "Forbidden"))
+        assert resp.status_code == 200
+        rows = {i["principal"]: i["principal_display_name"] for i in resp.json()}
+        assert rows[SP_KNOWN] == SP_KNOWN
+
+    def test_client_batches_and_ignores_non_uuid_values(self) -> None:
+        api = DatabricksUnityCatalogClient(_make_settings())
+        api._get = AsyncMock(return_value={"Resources": [  # type: ignore[assignment]
+            {"applicationId": SP_KNOWN, "displayName": "svc-security-manager"},
+        ]})
+        ids = [SP_KNOWN.upper(), 'x" or displayName pr "', "grp-readers"]
+        ids += [f"00000000-0000-0000-0000-{i:012d}" for i in range(25)]
+        result = asyncio.new_event_loop().run_until_complete(
+            api.get_service_principal_names(ids)
+        )
+        assert result == {SP_KNOWN: "svc-security-manager"}
+        assert api._get.await_count == 2  # 26 valid ids -> batches of 20 + 6
+        filters = [c.args[1]["filter"] for c in api._get.await_args_list]
+        assert all("displayName pr" not in f and "grp-readers" not in f for f in filters)
+        assert api._get.await_args_list[0].args[0] == "/api/2.0/account/scim/v2/ServicePrincipals"

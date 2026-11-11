@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import Any, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -9,15 +10,20 @@ from schemas.blueprint_models import (
     CatalogResponse,
     ObjectPrivilegeResponse,
     PaginatedResponse,
-    PrincipalResponse,
     PrivilegeDetail,
     PrivilegesRequest,
     SchemaResponse,
     UnityCatalogObjectResponse,
 )
-from services.databricks_client import DatabricksApiError, DatabricksUnityCatalogClient
+from services.databricks_client import (
+    APPLICATION_ID_PATTERN,
+    DatabricksApiError,
+    DatabricksUnityCatalogClient,
+)
 from utils.pagination import filter_by_search, paginate_items
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/v1/discovery",
@@ -223,11 +229,56 @@ def map_privilege_assignment(
     return ObjectPrivilegeResponse(
         securable_type=securable_type,
         full_name=full_name,
-        # Your existing schema calls this group_name. Databricks may return
-        # a group, user, or service principal here.
+        # Databricks may return a group, user, or service principal here.
         principal=principal.strip(),
+        # Service principal IDs are replaced later by resolve_principal_display_names.
+        principal_display_name=principal.strip(),
         privileges=privileges,
     )
+
+
+async def resolve_principal_display_names(
+    assignments: list[ObjectPrivilegeResponse],
+    client: DatabricksUnityCatalogClient,
+) -> None:
+    """
+    Replace service principal application IDs with their display names in
+    `principal_display_name`. Lookups are cached; failures fall back to the
+    raw ID so the privileges response never fails because of name lookup.
+    """
+    app_ids = {
+        item.principal.lower()
+        for item in assignments
+        if APPLICATION_ID_PATTERN.match(item.principal)
+    }
+    if not app_ids:
+        return
+
+    names: dict[str, str] = {}
+    missing: list[str] = []
+    for app_id in sorted(app_ids):
+        cached = await discovery_cache.get(f"sp_name:{app_id}")
+        if cached is None:
+            missing.append(app_id)
+        elif cached:
+            names[app_id] = cached
+
+    if missing:
+        try:
+            resolved = await client.get_service_principal_names(missing)
+        except DatabricksApiError as exc:
+            logger.warning("Service principal name lookup failed: %s", exc.message)
+        else:
+            names.update(resolved)
+            for app_id in missing:
+                # Cache "" for unknown IDs so they are not looked up repeatedly.
+                await discovery_cache.set(f"sp_name:{app_id}", resolved.get(app_id, ""))
+
+    for item in assignments:
+        display_name = names.get(item.principal.lower())
+        if display_name:
+            item.principal_display_name = display_name
+
 
 @router.get("/catalog-name-exists")
 async def catalog_name_exists(
@@ -520,10 +571,11 @@ async def get_privileges(
         for result in results
         for assignment in result
     ]
+    await resolve_principal_display_names(flattened, client)
     flattened.sort(
         key=lambda item: (
             item.full_name,
-            item.principal.lower(),
+            item.principal_display_name.lower(),
         )
     )
     return flattened

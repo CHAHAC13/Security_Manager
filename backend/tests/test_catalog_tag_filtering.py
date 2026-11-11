@@ -19,7 +19,6 @@ from fastapi.testclient import TestClient
 
 from core.cache import discovery_cache
 from core.config import Settings
-from schemas.blueprint_models import CatalogResponse
 from services.databricks_client import DatabricksApiError, DatabricksUnityCatalogClient
 
 

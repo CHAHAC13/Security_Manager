@@ -37,7 +37,7 @@ Environment variables
 Local setup
 1.	Use the Python version approved by the project.
 2.	Create a virtual environment.
-3.	Install dependencies: `pip install -r requirements.txt`
+3.	Install dependencies: `pip install -r requirements-dev.txt` for development and tests (includes `requirements.txt`). Production/deployment installs only `pip install -r requirements.txt`.
 4.	Copy `.env.example` to `.env` and configure the development workspace.
 5.	Run syntax check: `python -m compileall .`
 6.	Run tests: `pytest`

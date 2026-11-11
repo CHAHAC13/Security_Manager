@@ -1,5 +1,5 @@
 from typing import Generic, Literal, TypeVar
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 T = TypeVar("T")
 
@@ -74,24 +74,10 @@ class PrivilegeDetail(BaseModel):
 class ObjectPrivilegeResponse(BaseModel):
     securable_type: SecurableType
     full_name: str
+    # Raw Unity Catalog principal (group name, user email, or service
+    # principal application ID). Use this value for GRANT/REVOKE.
     principal: str
+    # Human-readable name for display. Service principal application IDs are
+    # resolved to their display name; otherwise equals `principal`.
+    principal_display_name: str
     privileges: list[PrivilegeDetail]
-
-class PrincipalResponse(BaseModel):
-    group_name: str
-    # Number of selected securables this principal holds privileges on.
-    securable_count: int
-    # Distinct privileges held across the selected securables.
-    privileges: list[str]
-
-class ErrorResponse(BaseModel):
-    code: str
-    message: str
-    request_id: str | None = None
-
-class CacheClearResponse(BaseModel):
-    message: str
-    deleted_entries: int
-
-class DiscoveryQuery(BaseModel):
-    search: str | None = Field(default = None, max_length = 200)
