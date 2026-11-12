@@ -1,5 +1,8 @@
 import type { Approver, RoleApprovers } from '@/types/blueprint';
-import { TECHNICAL_OWNERS } from '@/config/approverConfig';
+export const TECHNICAL_OWNERS: readonly Approver[] = [
+  { id: 'technical-jisun-yoon', displayName: 'Jisun Yoon', email: 'Jisun.Yoon@Pfizer.com' },
+  { id: 'technical-sreeram-koneru', displayName: 'Sreeram Koneru', email: 'Sreeram.Koneru@pfizer.com' },
+];
 
 /** Mock corporate directory. Not a directory integration. */
 export const MOCK_DIRECTORY_USERS: Approver[] = [

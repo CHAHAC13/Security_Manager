@@ -258,36 +258,41 @@ Unchanged discovered groups are excluded. Roles are read from wizard state
 
 | File | Responsibility |
 |---|---|
-| `src/config/approverConfig.ts` | Fixed `TECHNICAL_OWNERS`, `MAX_APPROVERS_PER_TYPE`, `ALLOW_SAME_PERSON_BOTH_TYPES`, debounce/min chars, `USE_MOCK`, mock latency/error toggle, endpoint placeholders. |
-| `src/services/approverService.ts` | `ApproverService` contract + request/response types, mock implementation, HTTP adapter (`apiClient`). |
-| `src/data/approverData.ts` | Mock directory users, known role approvers and sample roles. |
+| `src/config/approverConfig.ts` | Approver limits and validation settings, debounce/min chars and endpoint paths. |
+| `src/services/approverService.ts` | `ApproverService` contract and HTTP owner-directory adapter (`apiClient`). |
+| `src/test/approverData.ts`, `src/test/mockApproverService.ts` | Test-only owner fixtures and service. |
 | `src/lib/approvers.ts` | Pure validation, add/remove, Apply-to-All, reconcile/prefill, filter and scope helpers (unit-tested). |
-| `src/hooks/useApprovers.ts` | Prefills existing roles once, prunes removed roles, loads scope labels, loading/error/retry. |
+| `src/hooks/useApprovers.ts` | Loads technical choices, prunes removed roles, loads scope labels, and provides loading/error/retry. |
 | `src/components/blueprint/BlueprintApproversForm.tsx` | Step orchestration: header/progress, toolbar, banner, table, modal, toast, empty state. |
 | `ApproverTable`, `ApproverCell`, `UserPickerTypeahead`, `ApplyToAllModal`, `ValidationBanner` | Reusable building blocks in `src/components/blueprint/`. |
 
-### Switching to the real API
+### Owner directory API
 
-1. Implement backend endpoints matching the types in `approverService.ts`:
-   `GET /api/directory/users?q=`, `GET /api/blueprints/{id}/approvers?roleIds=`,
-   `PUT /api/blueprints/{id}/approvers` (body `{ approvers }`, response `{ success, savedAt }`).
-2. Set `VITE_APPROVERS_USE_MOCK=false` (or change `USE_MOCK`). No UI changes needed.
-3. Replace the wizard's client-generated `draft-<uuid>` blueprint id with the id issued by the backend.
+The owner picker always uses `GET /api/v1/approvers/technical` for allowed
+technical owners and `GET /api/v1/approvers/business?search=...&page=...&page_size=100`
+for business-owner search, following all result pages. The adapter maps the API's
+snake_case records into the frontend approver model. API failures are displayed
+without fallback data. The backend currently serves mock directory records; this
+is not yet an Active Directory or technical group integration.
 
-Mock failures can be simulated with `VITE_APPROVERS_MOCK_ERROR=true` or
-`setMockApproverError(true)`.
+The backend does not provide existing role assignments or approver draft
+persistence. Existing roles start with no prefilled owners;
+users may make temporary selections manually. Saving drafts that include
+approvers and submitting are unavailable until backend persistence is added.
+The wizard's client-generated `draft-<uuid>` blueprint id must also be replaced
+with a backend-issued id before enabling draft persistence.
 
 ### Behaviour notes
 
-- Next ("Next: Deployment") is disabled until every role requiring approval is complete; Save Draft is always allowed.
+- Next ("Next: Deployment") is disabled until every role requiring approval is complete; saving approver assignments is unavailable.
 - Approval scope uses `rolesRequiringApproval` and the existing permission/Request Manager diff helpers. Reverted edits and changes to inactive Request Manager fields do not require approval. New roles always require approval.
-- Prefill lookups, counters, validation, bulk actions and saved approver payloads include only roles requiring approval. Approvers for reverted/removed roles are pruned without removing those roles from Permissions. With only unchanged roles, no approver lookup is made and "No changes require approval" allows Next to Deployment. A blueprint with no roles still links back to Permissions.
+- Counters, validation and bulk actions include only roles requiring approval. Approvers for reverted/removed roles are pruned without removing those roles from Permissions. With only unchanged roles, no approver lookup is made and "No changes require approval" allows Next to Deployment. A blueprint with no roles still links back to Permissions.
 - Step 5 configures Deployment with Back, Save Draft and Next. Submit appears only on Step 6; selecting Immediate never performs a deployment.
-- Existing-role approvers are prefilled once per role (`prefilledRoleIds`), so user removals are not re-filled on revisit.
-- Technical owners (new and existing roles, including bulk assignment) use non-searchable checkboxes for `Jisun.Yoon@Pfizer.com` and `Sreeram.Koneru@pfizer.com`. Select one or both; directory search cannot add other technical owners.
-- Business owners for existing roles come from `getRoleApprovers` and remain editable/searchable. New roles start empty and use `searchDirectoryUsers` to select business owners. Both operations already have mock and HTTP adapters; backend endpoints are still pending.
+- Existing-role assignments cannot be loaded until a role-assignment API exists. Selected owners remain in wizard state across Back/Next navigation but are not persisted.
+- Technical owners (new and existing roles, including bulk assignment) use non-searchable checkboxes from the technical approvers endpoint. Validation uses the same active list.
+- Business-owner search uses the business approvers endpoint. New roles start empty, and existing roles must be assigned manually until an existing-assignment API is available.
 - Each owner column has its own Copy to all action. Technical-only copying never changes business owners (and vice versa), even in Replace mode or when role filters are active.
-- Technical owners display only the two email checkboxes, with no selected-name chips above them. API identities are matched by case-insensitive email, independently of directory IDs. Obsolete technical owners are removed from loaded drafts and API prefill; business owners are unchanged. If no valid technical owner remains, the user must select one before Next. The backend must enforce the same two-person allowlist.
+- Technical owners display email checkboxes, with no selected-name chips above them. API identities are matched by case-insensitive email, independently of directory IDs. Obsolete technical owners are removed from loaded drafts and API prefill; business owners are unchanged. If no valid technical owner remains, the user must select one before Next. The backend must enforce its authoritative allowlist.
 - Apply to All supports Add/Replace and "Only roles missing approvers" (fills only empty columns); replacing that would remove approvers requires confirmation.
 - Same person in both columns is a warning when `ALLOW_SAME_PERSON_BOTH_TYPES` is true, otherwise a blocking error.
 - UI validation is not a security boundary; the backend must re-validate approvers, reject service accounts and enforce self-approval rules.

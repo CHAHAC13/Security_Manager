@@ -128,6 +128,7 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
     if (currentStep === 4 && !approversReady) return;
     if (currentStep === 5 && !deploymentRef.current?.validate()) return;
     if (currentStep === 6) {
+      if (!approverService.canSaveDraft) return;
       if (getBlueprintReviewIssues({
         setup: setupData, objects: objectsData, permissions: permissionsData,
         approvers: approversData, deployment: deploymentData,
@@ -147,7 +148,7 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
       }
     }
     if (currentStep < BLUEPRINT_STEPS.length) setCurrentStep((prev) => (prev + 1) as BlueprintStep);
-  }, [currentStep, setupData, objectsData, permissionsData, approversData, deploymentData, permissionsReady, approversReady]);
+  }, [currentStep, setupData, objectsData, permissionsData, approversData, deploymentData, permissionsReady, approversReady, approverService]);
 
   const handleBack = useCallback(() => {
     if (currentStep > 1) {
@@ -160,7 +161,7 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
   }, [navigate]);
 
   const handleSubmitForApproval = useCallback(async () => {
-    if (actionInProgress.current || currentStep !== 6) return;
+    if (actionInProgress.current || currentStep !== 6 || !approverService.canSaveDraft) return;
     const blueprint: BlueprintFormData = {
       setup: setupData, objects: objectsData, permissions: permissionsData,
       approvers: approversData, deployment: deploymentData,
@@ -186,7 +187,7 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
       actionInProgress.current = false;
       setWorking(false);
     }
-  }, [currentStep, setupData, objectsData, permissionsData, approversData, deploymentData, navigate]);
+  }, [currentStep, setupData, objectsData, permissionsData, approversData, deploymentData, navigate, approverService]);
 
   const handleSaveDraft = useCallback(async () => {
     if (actionInProgress.current) return;
@@ -194,6 +195,10 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
     setSaving(true);
     setDraftFeedback(null);
     try {
+      if (!approverService.canSaveDraft && (currentStep >= 4
+        || Object.keys(approversData.approvers).length > 0 || approversNeedClearing.current)) {
+        throw new Error('Saving approver assignments is unavailable until the draft API is implemented.');
+      }
       let permissions = permissionsData;
       // Steps 3+ already reconciled scope on entry to Permissions; re-running it would rebuild role identities.
       if (currentStep < 3) {
@@ -300,6 +305,9 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
 
       {draftFeedback?.error && <p role="alert" className="text-sm text-rose-700">{draftFeedback.message}</p>}
       {draftFeedback && !draftFeedback.error && <Toast message={draftFeedback.message} onDismiss={dismissDraftFeedback} />}
+      {currentStep === 6 && !approverService.canSaveDraft && (
+        <p role="status" className="text-sm text-amber-700">Submitting approver assignments is unavailable until the backend supports them.</p>
+      )}
 
       {/* Stepper progress bar */}
       <BlueprintStepper currentStep={currentStep} />
@@ -314,10 +322,10 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
         busy={saving || working || checkingObjects}
         saving={saving}
         nextDisabled={(currentStep === 3 && !permissionsReady) || (currentStep === 4 && !approversReady)
-          || (currentStep === 6 && getBlueprintReviewIssues({
+          || (currentStep === 6 && (!approverService.canSaveDraft || getBlueprintReviewIssues({
             setup: setupData, objects: objectsData, permissions: permissionsData,
             approvers: approversData, deployment: deploymentData,
-          }).length > 0)}
+          }).length > 0))}
         nextLabel={currentStep === 4 ? 'Next: Deployment' : currentStep === 6 ? 'Submit for Approval' : undefined}
         saveDisabled={currentStep === 3 && !permissionsReady}
       />

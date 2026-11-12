@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { mergePrefilledApprovers, reconcileApprovers } from '@/lib/approvers';
 import type { ApproverService } from '@/services/approverService';
-import type { BlueprintApproversData, PermissionObject, RoleAssignment } from '@/types/blueprint';
+import type { Approver, BlueprintApproversData, PermissionObject, RoleAssignment } from '@/types/blueprint';
 
 /**
  * Loads current approvers for existing roles (once per role) and the selected object hierarchy
@@ -16,6 +16,7 @@ export function useApprovers(
   loadScopeObjects: () => Promise<PermissionObject[]>,
 ) {
   const [objects, setObjects] = useState<PermissionObject[]>([]);
+  const [technicalOwners, setTechnicalOwners] = useState<Approver[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [attempt, setAttempt] = useState(0);
@@ -31,19 +32,23 @@ export function useApprovers(
       const { roles, data } = latest.current;
       try {
         const pending = roles.filter((role) => role.status === 'EXISTING' && !data.prefilledRoleIds.includes(role.id));
-        const [scopeObjects, fetched] = await Promise.all([
+        const [scopeObjects, availableTechnicalOwners, fetched] = await Promise.all([
           // Scope labels are informational; a failure here must not block approver assignment.
           roles.length ? loadScopeObjects().catch(() => [] as PermissionObject[]) : Promise.resolve([]),
-          pending.length
+          roles.length ? service.listTechnicalApprovers() : Promise.resolve([]),
+          pending.length && service.getRoleApprovers
             ? service.getRoleApprovers({ blueprintId, roles: pending.map((role) => ({ roleId: role.id, roleName: role.roleName })) })
             : Promise.resolve({}),
         ]);
         if (!active) return;
         const { data: current, onChange } = latest.current;
-        let next = reconcileApprovers(current, roles.map((role) => role.id));
-        if (pending.length) next = mergePrefilledApprovers(next, fetched, pending.map((role) => role.id));
+        let next = reconcileApprovers(current, roles.map((role) => role.id), availableTechnicalOwners);
+        if (pending.length && service.getRoleApprovers) {
+          next = mergePrefilledApprovers(next, fetched, pending.map((role) => role.id), availableTechnicalOwners);
+        }
         if (next !== current) onChange(next);
         setObjects(scopeObjects);
+        setTechnicalOwners(availableTechnicalOwners);
       } catch (cause) {
         if (active) setError(cause instanceof Error ? cause.message : 'Unable to load current approvers.');
       } finally {
@@ -55,5 +60,5 @@ export function useApprovers(
     // Roles/data/onChange are read from a ref: approver edits and new callback identities must not reload.
   }, [roleKey, blueprintId, service, loadScopeObjects, attempt]);
   const retry = useCallback(() => setAttempt((value) => value + 1), []);
-  return { objects, loading, error, retry };
+  return { objects, technicalOwners, loading, error, retry };
 }

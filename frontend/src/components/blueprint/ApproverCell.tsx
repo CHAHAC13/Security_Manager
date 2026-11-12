@@ -1,7 +1,6 @@
 import type { KeyboardEvent } from 'react';
 import { AlertCircle, X } from 'lucide-react';
 import { UserPickerTypeahead } from './UserPickerTypeahead';
-import { TECHNICAL_OWNERS } from '@/config/approverConfig';
 import { APPROVER_TYPE_LABELS, DEFAULT_APPROVER_RULES, type ApproverRules } from '@/lib/approvers';
 import type { ApproverService } from '@/services/approverService';
 import type { Approver, ApproverType } from '@/types/blueprint';
@@ -55,7 +54,7 @@ export function ApproverCell({ contextLabel, type, approvers, service, onAdd, on
       {type === 'technical' ? (
         <fieldset className="space-y-2">
           <legend className="sr-only">Select {typeLabel}s for {contextLabel}</legend>
-          {TECHNICAL_OWNERS.map((owner) => {
+          {(rules.technicalOwners ?? []).map((owner) => {
             const selected = approvers.find((person) => person.email.toLowerCase() === owner.email.toLowerCase());
             return (
               <label key={owner.id} className="flex items-start gap-2 break-all text-xs text-slate-700">

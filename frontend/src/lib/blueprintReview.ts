@@ -60,7 +60,12 @@ export function getBlueprintReviewIssues(data: BlueprintFormData): ReviewIssue[]
   }
 
   for (const role of rolesRequiringApproval(roles)) {
-    const validation = validateRoleApprovers(approvers.approvers[role.id] ?? { technical: [], business: [] }, DEFAULT_APPROVER_RULES);
+    const entry = approvers.approvers[role.id] ?? { technical: [], business: [] };
+    // The selected technical owners were validated against the directory in Step 4.
+    const validation = validateRoleApprovers(entry, {
+      ...DEFAULT_APPROVER_RULES,
+      technicalOwners: entry.technical,
+    });
     for (const type of ['technical', 'business'] as const) {
       if (validation.errors[type]) {
         issues.push({

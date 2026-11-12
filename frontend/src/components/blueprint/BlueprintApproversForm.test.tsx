@@ -3,10 +3,11 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { BlueprintApproversForm } from './BlueprintApproversForm';
-import { createMockApproverService, type ApproverService } from '@/services/approverService';
+import { createHttpApproverService, type ApproverService } from '@/services/approverService';
+import { createMockApproverService } from '@/test/mockApproverService';
+import apiClient from '@/lib/apiClient';
 import { createMockPermissionsService } from '@/services/permissionsService';
-import { MOCK_APPROVER_SAMPLE_ROLES } from '@/data/approverData';
-import { TECHNICAL_OWNERS } from '@/config/approverConfig';
+import { MOCK_APPROVER_SAMPLE_ROLES, TECHNICAL_OWNERS } from '@/test/approverData';
 import { objects, objectsData } from '@/test/permissionFixtures';
 import { INITIAL_APPROVERS_DATA } from '@/types/blueprint';
 import type { BlueprintApproversData, RoleAssignment } from '@/types/blueprint';
@@ -23,7 +24,9 @@ const roles: RoleAssignment[] = MOCK_APPROVER_SAMPLE_ROLES.map((role, index) => 
 
 const NEW_ROLE = 'dbx-prd-gpd-user-odx-clinops-veevaquality';
 
-function setup({ service = createMockApproverService({ latencyMs: [0, 0], shouldFail: () => false }), roleList = roles, initial = INITIAL_APPROVERS_DATA } = {}) {
+function setup({ service = createMockApproverService({ latencyMs: [0, 0], shouldFail: () => false }), roleList = roles, initial = INITIAL_APPROVERS_DATA }: {
+  service?: ApproverService; roleList?: RoleAssignment[]; initial?: BlueprintApproversData;
+} = {}) {
   const onReady = vi.fn();
   const onBack = vi.fn();
   let latest: BlueprintApproversData = initial;
@@ -49,6 +52,38 @@ async function addViaKeyboard(input: HTMLElement, query: string) {
 }
 
 describe('BlueprintApproversForm', () => {
+  it('uses the owner APIs without inventing existing assignments', async () => {
+    const get = vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
+      if (url === '/api/v1/approvers/technical') {
+        return { data: { items: [{ id: 'api-tech', display_name: 'Technical Owner', email: 'technical@example.com' }] } };
+      }
+      if (url === '/api/v1/approvers/business') {
+        return { data: { items: [{ id: 'api-biz', display_name: 'Business Owner', email: 'business@example.com' }], pagination: { has_next: false } } };
+      }
+      throw new Error(`Unexpected API request: ${url}`);
+    });
+    try {
+      const { latest, onReady } = setup({ roleList: [roles[0]], service: createHttpApproverService() });
+      await screen.findByText('0 of 1 roles complete');
+      expect(screen.queryByText(/Current owner assignments for existing roles are unavailable/)).toBeNull();
+      expect(screen.queryByText(/Approver selections are temporary/)).toBeNull();
+      expect(latest().approvers[roles[0].id]).toBeUndefined();
+      await userEvent.click(screen.getByRole('checkbox', { name: 'technical@example.com' }));
+      await addViaKeyboard(screen.getByRole('combobox'), 'Business');
+      expect(latest().approvers[roles[0].id]).toEqual({
+        technical: [{ id: 'api-tech', displayName: 'Technical Owner', email: 'technical@example.com' }],
+        business: [{ id: 'api-biz', displayName: 'Business Owner', email: 'business@example.com' }],
+      });
+      expect(get).toHaveBeenCalledWith('/api/v1/approvers/technical');
+      expect(get).toHaveBeenCalledWith('/api/v1/approvers/business', expect.objectContaining({
+        params: { search: 'Business', page: 1, page_size: 100 },
+      }));
+      await waitFor(() => expect(onReady).toHaveBeenLastCalledWith(true));
+    } finally {
+      get.mockRestore();
+    }
+  });
+
   it('excludes unchanged roles from prefill, validation, counters and bulk copies', async () => {
     const unchanged = { ...roles[0], id: 'unchanged', roleName: 'unchanged-group', objectPermissions: [] };
     const base = createMockApproverService({ latencyMs: [0, 0], shouldFail: () => false });
@@ -134,6 +169,23 @@ describe('BlueprintApproversForm', () => {
     expect(await screen.findByText('3 of 3 roles complete')).toBeTruthy();
     expect(screen.queryByText(/missing required approvers/)).toBeNull();
     await waitFor(() => expect(onReady).toHaveBeenLastCalledWith(true));
+  });
+
+  it('uses the fetched technical-owner allowlist for choices and validation', async () => {
+    const base = createMockApproverService({ latencyMs: [0, 0], shouldFail: () => false });
+    const technicalOwners = [
+      { id: 'api-1', displayName: 'Technical Owner One', email: 'one@example.com' },
+      { id: 'api-2', displayName: 'Technical Owner Two', email: 'two@example.com' },
+      { id: 'api-3', displayName: 'Technical Owner Three', email: 'three@example.com' },
+    ];
+    const service = { ...base, listTechnicalApprovers: async () => technicalOwners };
+    const { latest } = setup({ service, roleList: [roles[2]] });
+    await screen.findByText('0 of 1 roles complete');
+    const newRow = row(NEW_ROLE);
+    expect(within(newRow).getAllByRole('checkbox').map((input) => input.getAttribute('aria-label') ?? input.closest('label')?.textContent))
+      .toEqual(['one@example.com', 'two@example.com', 'three@example.com']);
+    await userEvent.click(within(newRow).getByRole('checkbox', { name: /three@example\.com/ }));
+    expect(latest().approvers['role-veevaquality'].technical).toEqual([technicalOwners[2]]);
   });
 
   it('unchecks technical owners with the keyboard and shows the inline required message', async () => {
@@ -260,7 +312,7 @@ describe('BlueprintApproversForm', () => {
     const owner = { id: 'api-owner', displayName: 'API Business Owner', email: 'business@example.com' };
     const replacement = { id: 'replacement', displayName: 'Replacement Owner', email: 'replacement@example.com' };
     const apiTechnical = { ...TECHNICAL_OWNERS[0], id: 'api-technical', email: TECHNICAL_OWNERS[0].email.toUpperCase() };
-    const getRoleApprovers = vi.fn<ApproverService['getRoleApprovers']>().mockResolvedValue({
+    const getRoleApprovers = vi.fn<NonNullable<ApproverService['getRoleApprovers']>>().mockResolvedValue({
       'role-clinops': { technical: [apiTechnical], business: [owner] },
       'role-clinops-cdm': { technical: [TECHNICAL_OWNERS[1]], business: [owner] },
     });
@@ -306,7 +358,7 @@ describe('BlueprintApproversForm', () => {
 
   it('shows an error with retry when current approvers cannot be loaded', async () => {
     const base = createMockApproverService({ latencyMs: [0, 0], shouldFail: () => false });
-    const getRoleApprovers = vi.fn<ApproverService['getRoleApprovers']>()
+    const getRoleApprovers = vi.fn<NonNullable<ApproverService['getRoleApprovers']>>()
       .mockRejectedValueOnce(new Error('Directory unavailable'))
       .mockImplementation((request) => base.getRoleApprovers(request));
     setup({ service: { ...base, getRoleApprovers } });

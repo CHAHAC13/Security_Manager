@@ -44,7 +44,10 @@ export function BlueprintApproversForm({
 }: Props) {
   const loadScopeObjects = useCallback(() => permissions.getSelectedObjects(objectsData), [permissions, objectsData]);
   const approvalRoles = useMemo(() => rolesRequiringApproval(roles), [roles]);
-  const { objects, loading, error, retry } = useApprovers(approvalRoles, data, onChange, blueprintId, service, loadScopeObjects);
+  const { objects, technicalOwners, loading, error, retry } = useApprovers(
+    approvalRoles, data, onChange, blueprintId, service, loadScopeObjects,
+  );
+  const activeRules = useMemo(() => ({ ...rules, technicalOwners }), [rules, technicalOwners]);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<RoleFilter>('all');
   const [modal, setModal] = useState<{ initial?: RoleApprovers; type?: ApproverType } | null>(null);
@@ -54,9 +57,9 @@ export function BlueprintApproversForm({
   const approverRoles = useMemo<ApproverRole[]>(() => approvalRoles.map((role) => ({
     id: role.id, roleName: role.roleName, status: role.status, scope: describeRoleScope(role.scopeObjectId, objects),
   })), [approvalRoles, objects]);
-  const validation = useMemo(() => validateApprovers(approverRoles, data, rules), [approverRoles, data, rules]);
-  const incomplete = useMemo(() => incompleteRoles(approverRoles, data, rules), [approverRoles, data, rules]);
-  const visibleRoles = useMemo(() => filterApproverRoles(approverRoles, data, query, filter, rules), [approverRoles, data, query, filter, rules]);
+  const validation = useMemo(() => validateApprovers(approverRoles, data, activeRules), [approverRoles, data, activeRules]);
+  const incomplete = useMemo(() => incompleteRoles(approverRoles, data, activeRules), [approverRoles, data, activeRules]);
+  const visibleRoles = useMemo(() => filterApproverRoles(approverRoles, data, query, filter, activeRules), [approverRoles, data, query, filter, activeRules]);
   const completeCount = approverRoles.length - incomplete.length;
   const ready = !loading && !error && roles.length > 0 && incomplete.length === 0;
   useEffect(() => { onReadyChange(ready); return () => onReadyChange(false); }, [onReadyChange, ready]);
@@ -71,7 +74,7 @@ export function BlueprintApproversForm({
   }
 
   function apply(options: ApplyToAllOptions) {
-    const result = applyToAll(data, approvalRoles.map((role) => role.id), options, rules);
+    const result = applyToAll(data, approvalRoles.map((role) => role.id), options, activeRules);
     onChange(result.data);
     setModal(null);
     const count = result.updatedRoleIds.length;
@@ -151,7 +154,7 @@ export function BlueprintApproversForm({
             </div>
           </div>
           {visibleRoles.length ? (
-            <ApproverTable roles={visibleRoles} data={data} validation={validation} service={service} rules={rules}
+            <ApproverTable roles={visibleRoles} data={data} validation={validation} service={service} rules={activeRules}
               onRoleChange={(roleId, entry) => onChange(setRoleApprovers(data, roleId, entry))}
               onCopyToAll={approverRoles.length > 1 ? (roleId, type) => setModal({ initial: approversFor(data, roleId), type }) : undefined} />
           ) : (
@@ -161,7 +164,7 @@ export function BlueprintApproversForm({
       )}
 
       {modal && (
-        <ApplyToAllModal data={data} roleIds={approvalRoles.map((role) => role.id)} service={service} rules={rules}
+        <ApplyToAllModal data={data} roleIds={approvalRoles.map((role) => role.id)} service={service} rules={activeRules}
           initial={modal.initial} type={modal.type} onApply={apply} onClose={() => setModal(null)} />
       )}
       {toast && <Toast message={toast} onDismiss={dismissToast} />}
