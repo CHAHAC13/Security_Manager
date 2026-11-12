@@ -5,13 +5,13 @@ import {
   type ApplyToAllOptions, type ApproverRole, type ApproverRules,
 } from './approvers';
 import { objects } from '@/test/permissionFixtures';
-import { TECHNICAL_OWNERS } from '@/config/approverConfig';
+import { TECHNICAL_OWNERS } from '@/test/approverData';
 import type { Approver, BlueprintApproversData } from '@/types/blueprint';
 
 const person = (id: string): Approver => ({ id, displayName: `User ${id}`, email: `${id}@example.com` });
 const [a, b] = TECHNICAL_OWNERS;
 const c = person('c');
-const rules: ApproverRules = { maxPerType: 2, allowSamePersonBothTypes: true };
+const rules: ApproverRules = { maxPerType: 2, allowSamePersonBothTypes: true, technicalOwners: TECHNICAL_OWNERS };
 const roles: ApproverRole[] = [
   { id: 'r1', roleName: 'dbx-dev-gpd-user-odx', status: 'EXISTING' },
   { id: 'r2', roleName: 'dbx-dev-gpd-user-odx-cdm', status: 'EXISTING' },
@@ -71,9 +71,9 @@ describe('approver validation', () => {
   it('rejects unsupported technical owners from API or draft state', () => {
     const entry = { technical: [], business: [b] };
     expect(addApprover(entry, 'technical', c, rules)).toEqual({ added: false, entry, reason: 'invalid-technical-owner' });
-    expect(validateRoleApprovers({ technical: [c], business: [b] }).errors.technical).toMatch(/Select only/);
-    expect(isRoleComplete({ technical: [c], business: [b] })).toBe(false);
-    expect(() => applyToAll(data(), ['r1'], options({ technical: [c] }))).toThrow(/Select only/);
+    expect(validateRoleApprovers({ technical: [c], business: [b] }, rules).errors.technical).toMatch(/Select only/);
+    expect(isRoleComplete({ technical: [c], business: [b] }, rules)).toBe(false);
+    expect(() => applyToAll(data(), ['r1'], options({ technical: [c] }), rules)).toThrow(/Select only/);
   });
 
   it('matches technical owners by case-insensitive email despite API-specific IDs', () => {
@@ -149,11 +149,16 @@ describe('approver state helpers', () => {
 
   it('removes obsolete technical owners from retained drafts and fetched prefill without changing business owners', () => {
     const value = data({ r1: { technical: [a, c], business: [c] } });
-    const cleaned = reconcileApprovers(value, ['r1']);
+    const cleaned = reconcileApprovers(value, ['r1'], TECHNICAL_OWNERS);
     expect(cleaned.approvers.r1).toEqual({ technical: [a], business: [c] });
     expect(value.approvers.r1.technical).toEqual([a, c]);
-    expect(mergePrefilledApprovers(data(), { r1: { technical: [c, b], business: [c] } }, ['r1']).approvers.r1)
+    expect(mergePrefilledApprovers(data(), { r1: { technical: [c, b], business: [c] } }, ['r1'], TECHNICAL_OWNERS).approvers.r1)
       .toEqual({ technical: [b], business: [c] });
+  });
+
+  it('preserves selected technical owners during reconciliation when no directory list is available', () => {
+    const value = data({ r1: { technical: [c], business: [b] } });
+    expect(reconcileApprovers(value, ['r1'])).toBe(value);
   });
 
   it('filters roles by name, status and missing approvers', () => {

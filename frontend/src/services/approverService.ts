@@ -1,10 +1,5 @@
 import apiClient from '@/lib/apiClient';
-import {
-  APPROVER_ENDPOINTS, MOCK_ERROR_DEFAULT, MOCK_LATENCY_MS, USE_MOCK,
-} from '@/config/approverConfig';
-import {
-  MOCK_DIRECTORY_USERS, MOCK_FALLBACK_APPROVER_PAIRS, MOCK_ROLE_APPROVERS_BY_NAME,
-} from '@/data/approverData';
+import { APPROVER_ENDPOINTS } from '@/config/approverConfig';
 import type { Approver, RoleApproversMap } from '@/types/blueprint';
 
 /* ── Request / response contracts ── */
@@ -37,112 +32,63 @@ export interface SaveApproversDraftResponse {
 }
 
 export interface ApproverService {
+  canSaveDraft: boolean;
+  listTechnicalApprovers(): Promise<Approver[]>;
   searchDirectoryUsers(query: string, signal?: AbortSignal): Promise<SearchDirectoryUsersResponse>;
-  getRoleApprovers(request: GetRoleApproversRequest): Promise<GetRoleApproversResponse>;
+  getRoleApprovers?(request: GetRoleApproversRequest): Promise<GetRoleApproversResponse>;
   saveApproversDraft(blueprintId: string, approvers: RoleApproversMap): Promise<SaveApproversDraftResponse>;
 }
 
-/* ── Mock implementation ── */
-
-let mockErrorEnabled = MOCK_ERROR_DEFAULT;
-
-/** Toggle simulated failures of the default mock service (e.g. from the browser console in dev). */
-export function setMockApproverError(enabled: boolean) {
-  mockErrorEnabled = enabled;
+interface ApiApprover {
+  id: string;
+  display_name: string;
+  email: string;
+  department?: string | null;
 }
 
-export interface MockApproverServiceOptions {
-  latencyMs?: readonly [number, number];
-  shouldFail?: () => boolean;
-  users?: Approver[];
-}
-
-function stableIndex(value: string, size: number) {
-  let hash = 0;
-  for (const char of value) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  return hash % size;
-}
-
-/** Strips the `dbx-<env>-` prefix so a mock lookup matches the same role in any environment. */
-function environmentAgnostic(roleName: string) {
-  return roleName.replace(/^dbx-[a-z]+-/, '');
-}
-
-export function createMockApproverService({
-  latencyMs = MOCK_LATENCY_MS,
-  shouldFail = () => mockErrorEnabled,
-  users = MOCK_DIRECTORY_USERS,
-}: MockApproverServiceOptions = {}): ApproverService {
-  async function simulate(signal?: AbortSignal) {
-    const [min, max] = latencyMs;
-    const delay = min + Math.random() * Math.max(0, max - min);
-    if (delay > 0) {
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, delay);
-        signal?.addEventListener('abort', () => {
-          clearTimeout(timer);
-          reject(new DOMException('Aborted', 'AbortError'));
-        }, { once: true });
-      });
-    }
-    if (shouldFail()) throw new Error('Approver service is unavailable (simulated mock error).');
-  }
-  const byName = new Map(Object.entries(MOCK_ROLE_APPROVERS_BY_NAME)
-    .map(([name, approvers]) => [environmentAgnostic(name), approvers]));
-
+function mapApiApprover(item: ApiApprover): Approver {
   return {
-    async searchDirectoryUsers(query, signal) {
-      await simulate(signal);
-      const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-      if (!terms.length) return [];
-      return structuredClone(users.filter((item) => {
-        const haystack = `${item.displayName} ${item.email} ${item.department ?? ''}`.toLowerCase();
-        return terms.every((term) => haystack.includes(term));
-      }));
-    },
-    async getRoleApprovers({ roles }) {
-      await simulate();
-      const result: GetRoleApproversResponse = {};
-      for (const role of roles) {
-        // Deterministic demo data for roles without explicit fixtures, not real ownership.
-        result[role.roleId] = structuredClone(byName.get(environmentAgnostic(role.roleName))
-          ?? MOCK_FALLBACK_APPROVER_PAIRS[stableIndex(role.roleName, MOCK_FALLBACK_APPROVER_PAIRS.length)]);
-      }
-      return result;
-    },
-    async saveApproversDraft(_blueprintId, approvers) {
-      await simulate();
-      structuredClone(approvers);
-      return { success: true, savedAt: new Date().toISOString() };
-    },
+    id: item.id,
+    displayName: item.display_name,
+    email: item.email,
+    ...(item.department ? { department: item.department } : {}),
   };
 }
-
-/* ── HTTP implementation (activate with USE_MOCK = false) ── */
 
 export function createHttpApproverService(): ApproverService {
   return {
+    canSaveDraft: false,
+    async listTechnicalApprovers() {
+      const { data } = await apiClient.get<{ items: ApiApprover[] }>(
+        APPROVER_ENDPOINTS.technicalApprovers,
+      );
+      return data.items.map(mapApiApprover);
+    },
     async searchDirectoryUsers(query, signal) {
-      const { data } = await apiClient.get<SearchDirectoryUsersResponse>(
-        APPROVER_ENDPOINTS.searchDirectoryUsers, { params: { q: query }, signal },
-      );
-      return data;
+      const users: Approver[] = [];
+      let page = 1;
+      let hasNext: boolean;
+      do {
+        const { data } = await apiClient.get<{ items: ApiApprover[]; pagination: { has_next: boolean } }>(
+          APPROVER_ENDPOINTS.businessApprovers,
+          { params: { search: query, page, page_size: 100 }, signal },
+        );
+        if (typeof data.pagination?.has_next !== 'boolean') {
+          throw new Error('Business approver search returned invalid pagination.');
+        }
+        users.push(...data.items.map(mapApiApprover));
+        hasNext = data.pagination.has_next;
+        if (hasNext && data.items.length === 0) {
+          throw new Error('Business approver search returned an empty page with more results.');
+        }
+        page += 1;
+      } while (hasNext);
+      return users;
     },
-    async getRoleApprovers({ blueprintId, roles }) {
-      const { data } = await apiClient.get<GetRoleApproversResponse>(
-        APPROVER_ENDPOINTS.blueprintApprovers(blueprintId),
-        { params: { roleIds: roles.map((role) => role.roleId).join(',') } },
-      );
-      return data;
-    },
-    async saveApproversDraft(blueprintId, approvers) {
-      const body: SaveApproversDraftRequest = { approvers };
-      const { data } = await apiClient.put<SaveApproversDraftResponse>(
-        APPROVER_ENDPOINTS.blueprintApprovers(blueprintId), body,
-      );
-      return data;
+    async saveApproversDraft() {
+      throw new Error('Saving approver assignments is unavailable until the draft API is implemented.');
     },
   };
 }
 
-export const approverService: ApproverService = USE_MOCK ? createMockApproverService() : createHttpApproverService();
+export const approverService: ApproverService = createHttpApproverService();

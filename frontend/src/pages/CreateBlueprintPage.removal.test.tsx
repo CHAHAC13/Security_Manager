@@ -5,7 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CreateBlueprintPage } from './CreateBlueprintPage';
 import { objectDiscoveryService } from '@/services/objectDiscoveryService';
 import { createMockPermissionsService } from '@/services/permissionsService';
-import { createMockApproverService, type ApproverService } from '@/services/approverService';
+import type { ApproverService } from '@/services/approverService';
+import { createMockApproverService } from '@/test/mockApproverService';
 
 vi.mock('@/services/objectDiscoveryService', () => ({
   objectDiscoveryService: {

@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { CreateBlueprintPage } from './CreateBlueprintPage';
 import { HomePage } from './HomePage';
 import { createMockPermissionsService, PermissionsValidationError, type PermissionsService } from '@/services/permissionsService';
-import { createMockApproverService, type ApproverService } from '@/services/approverService';
+import { createHttpApproverService, type ApproverService } from '@/services/approverService';
+import { createMockApproverService } from '@/test/mockApproverService';
 import type { BlueprintFormData, BlueprintObjectsData } from '@/types/blueprint';
 import { objects, objectsData } from '@/test/permissionFixtures';
 import { createRole } from '@/lib/permissions';
@@ -55,6 +56,30 @@ async function addRole() {
 }
 
 describe('wizard permissions integration', () => {
+  it('does not save or submit through the unavailable approver API', async () => {
+    const baseline = {
+      ...createRole('existing-group', objects, 'dev', 'user'),
+      status: 'EXISTING' as const, mode: 'UPDATE_EXISTING' as const, roleName: 'existing-group',
+    };
+    baseline.objectPermissions = baseline.objectPermissions.map((permission) => ({
+      ...permission, originalPermissions: permission.objectId === 't1' ? ['SELECT'] : [],
+      permissions: permission.objectId === 't1' ? ['SELECT'] : [],
+    }));
+    const save = vi.fn<PermissionsService['savePermissionsDraft']>().mockResolvedValue(undefined);
+    await enterPermissions({ getExistingRolesForObjects: async () => [baseline], savePermissionsDraft: save }, createHttpApproverService());
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText(/No changes require approval/);
+    await userEvent.click(screen.getByRole('button', { name: 'Save Draft' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('Saving approver assignments is unavailable');
+    expect(save).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Next: Deployment' }));
+    await screen.findByRole('heading', { name: 'Deployment Strategy' });
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByRole('heading', { name: 'Review & Submit Blueprint' });
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Submit for Approval' }).disabled).toBe(true);
+    expect(screen.getByText(/Submitting approver assignments is unavailable/)).toBeTruthy();
+  }, 15000);
+
   it('validates Deployment, preserves draft state, supports review edits, and confirms submission', async () => {
     const baseline = {
       ...createRole('existing-group', objects, 'dev', 'user'),

@@ -1,4 +1,4 @@
-import { ALLOW_SAME_PERSON_BOTH_TYPES, MAX_APPROVERS_PER_TYPE, TECHNICAL_OWNERS } from '@/config/approverConfig';
+import { ALLOW_SAME_PERSON_BOTH_TYPES, MAX_APPROVERS_PER_TYPE } from '@/config/approverConfig';
 import type {
   Approver, ApproverType, BlueprintApproversData, PermissionObject, ResourceStatus, RoleApprovers, RoleApproversMap,
 } from '@/types/blueprint';
@@ -13,6 +13,7 @@ export const APPROVER_TYPE_LABELS: Record<ApproverType, string> = {
 export interface ApproverRules {
   maxPerType: number;
   allowSamePersonBothTypes: boolean;
+  technicalOwners?: readonly Approver[];
 }
 
 export const DEFAULT_APPROVER_RULES: ApproverRules = {
@@ -66,8 +67,9 @@ export function validateRoleApprovers(entry: RoleApprovers, rules: ApproverRules
     if (entry[type].length < 1) errors[type] = `At least one ${APPROVER_TYPE_LABELS[type]} is required`;
     else if (entry[type].length > rules.maxPerType) errors[type] = `No more than ${rules.maxPerType} ${APPROVER_TYPE_LABELS[type]}s are allowed`;
   }
-  if (!errors.technical && entry.technical.some((person) => !isTechnicalOwner(person))) {
-    errors.technical = 'Select only Jisun Yoon or Sreeram Koneru as Technical/System Owner';
+  const technicalOwners = rules.technicalOwners;
+  if (!errors.technical && technicalOwners && entry.technical.some((person) => !isTechnicalOwner(person, technicalOwners))) {
+    errors.technical = 'Select only available Technical/System Owners';
   }
   const overlap = entry.technical.filter((person) => entry.business.some((other) =>
     other.id === person.id || other.email.toLowerCase() === person.email.toLowerCase()));
@@ -107,14 +109,14 @@ export type AddApproverResult =
   | { added: true; entry: RoleApprovers }
   | { added: false; entry: RoleApprovers; reason: 'duplicate' | 'max' | 'invalid-technical-owner' };
 
-function isTechnicalOwner(approver: Approver) {
-  return TECHNICAL_OWNERS.some((owner) => owner.email.toLowerCase() === approver.email.toLowerCase());
+function isTechnicalOwner(approver: Approver, owners: readonly Approver[]) {
+  return owners.some((owner) => owner.email.toLowerCase() === approver.email.toLowerCase());
 }
 
 export function addApprover(
   entry: RoleApprovers, type: ApproverType, approver: Approver, rules: ApproverRules = DEFAULT_APPROVER_RULES,
 ): AddApproverResult {
-  if (type === 'technical' && !isTechnicalOwner(approver)) return { added: false, entry, reason: 'invalid-technical-owner' };
+  if (type === 'technical' && rules.technicalOwners && !isTechnicalOwner(approver, rules.technicalOwners)) return { added: false, entry, reason: 'invalid-technical-owner' };
   if (entry[type].some((item) => item.id === approver.id
     || (type === 'technical' && item.email.toLowerCase() === approver.email.toLowerCase()))) return { added: false, entry, reason: 'duplicate' };
   if (entry[type].length >= rules.maxPerType) return { added: false, entry, reason: 'max' };
@@ -147,8 +149,9 @@ function nextList(current: Approver[], incoming: Approver[], options: ApplyToAll
 export function applyToAll(
   data: BlueprintApproversData, roleIds: string[], options: ApplyToAllOptions, rules: ApproverRules = DEFAULT_APPROVER_RULES,
 ): { data: BlueprintApproversData; updatedRoleIds: string[] } {
-  if (options.technical.some((person) => !isTechnicalOwner(person))) {
-    throw new Error('Select only Jisun Yoon or Sreeram Koneru as Technical/System Owner');
+  const technicalOwners = rules.technicalOwners;
+  if (technicalOwners && options.technical.some((person) => !isTechnicalOwner(person, technicalOwners))) {
+    throw new Error('Select only available Technical/System Owners');
   }
   const approvers: RoleApproversMap = { ...data.approvers };
   const updatedRoleIds: string[] = [];
@@ -179,15 +182,21 @@ export function rolesLosingApprovers(
 }
 
 /** Drops removed roles and obsolete technical owners. Returns the same object when unchanged. */
-export function reconcileApprovers(data: BlueprintApproversData, roleIds: string[]): BlueprintApproversData {
+export function reconcileApprovers(
+  data: BlueprintApproversData,
+  roleIds: string[],
+  technicalOwners?: readonly Approver[],
+): BlueprintApproversData {
   const keep = new Set(roleIds);
   const staleApprovers = Object.keys(data.approvers).some((id) => !keep.has(id));
   const stalePrefill = data.prefilledRoleIds.some((id) => !keep.has(id));
-  const obsoleteTechnical = Object.values(data.approvers).some((entry) => entry.technical.some((person) => !isTechnicalOwner(person)));
+  const obsoleteTechnical = technicalOwners !== undefined && Object.values(data.approvers).some(
+    (entry) => entry.technical.some((person) => !isTechnicalOwner(person, technicalOwners)),
+  );
   if (!staleApprovers && !stalePrefill && !obsoleteTechnical) return data;
   return {
     approvers: Object.fromEntries(Object.entries(data.approvers).filter(([id]) => keep.has(id)).map(([id, entry]) => [
-      id, { ...entry, technical: entry.technical.filter(isTechnicalOwner) },
+      id, { ...entry, technical: technicalOwners ? entry.technical.filter((person) => isTechnicalOwner(person, technicalOwners)) : entry.technical },
     ])),
     prefilledRoleIds: data.prefilledRoleIds.filter((id) => keep.has(id)),
   };
@@ -196,15 +205,18 @@ export function reconcileApprovers(data: BlueprintApproversData, roleIds: string
 /** Merges fetched approvers, keeping valid user selections and excluding obsolete technical owners. */
 export function mergePrefilledApprovers(
   data: BlueprintApproversData, fetched: RoleApproversMap, requestedRoleIds: string[],
+  technicalOwners?: readonly Approver[],
 ): BlueprintApproversData {
   const approvers = { ...data.approvers };
   for (const roleId of requestedRoleIds) {
     const current = approversFor(data, roleId);
     const incoming = fetched[roleId];
     if (!incoming) continue;
-    const technical = current.technical.filter(isTechnicalOwner);
+    const technical = current.technical.filter((person) => !technicalOwners || isTechnicalOwner(person, technicalOwners));
     approvers[roleId] = {
-      technical: technical.length ? technical : dedupe((incoming.technical ?? []).filter(isTechnicalOwner), 'technical'),
+      technical: technical.length ? technical : dedupe(
+        (incoming.technical ?? []).filter((person) => !technicalOwners || isTechnicalOwner(person, technicalOwners)), 'technical',
+      ),
       business: current.business.length ? current.business : dedupe(incoming.business ?? []),
     };
   }
