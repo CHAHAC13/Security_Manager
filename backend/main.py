@@ -8,6 +8,7 @@ from core.config import get_settings
 from routers.blueprint_discovery import router as blueprint_discovery_router
 from routers.access_matrix import router as access_matrix_router
 from routers.approvers import router as approvers_router
+from services.databricks_client import close_shared_http_client
 
 
 @asynccontextmanager
@@ -16,6 +17,7 @@ async def lifespan(app: FastAPI):
     # architecture requires cross-worker cache consistency.
     yield
     await discovery_cache.clear()
+    await close_shared_http_client()
 
 
 settings = get_settings()

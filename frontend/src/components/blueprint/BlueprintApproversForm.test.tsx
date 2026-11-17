@@ -3,6 +3,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { BlueprintApproversForm } from './BlueprintApproversForm';
+import { DUMMY_BUSINESS_OWNERS } from '@/config/approverConfig';
 import { createHttpApproverService, type ApproverService } from '@/services/approverService';
 import { createMockApproverService } from '@/test/mockApproverService';
 import apiClient from '@/lib/apiClient';
@@ -45,20 +46,16 @@ function row(roleName: string) {
   return screen.getByText(roleName, { selector: 'span' }).closest('tr') as HTMLElement;
 }
 
-async function addViaKeyboard(input: HTMLElement, query: string) {
-  await userEvent.type(input, query);
-  await screen.findByRole('option', {}, { timeout: 2000 });
-  await userEvent.keyboard('{ArrowDown}{ArrowUp}{Enter}');
-}
+const technicalGroup = (container: HTMLElement) =>
+  within(within(container).getByRole('group', { name: /Select Technical\/System Owners/ }));
+const businessGroup = (container: HTMLElement) =>
+  within(within(container).getByRole('group', { name: /Select Domain\/Business Owners/ }));
 
 describe('BlueprintApproversForm', () => {
-  it('uses the owner APIs without inventing existing assignments', async () => {
+  it('uses the technical owner API and dummy business owners without directory search', async () => {
     const get = vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
       if (url === '/api/v1/approvers/technical') {
         return { data: { items: [{ id: 'api-tech', display_name: 'Technical Owner', email: 'technical@example.com' }] } };
-      }
-      if (url === '/api/v1/approvers/business') {
-        return { data: { items: [{ id: 'api-biz', display_name: 'Business Owner', email: 'business@example.com' }], pagination: { has_next: false } } };
       }
       throw new Error(`Unexpected API request: ${url}`);
     });
@@ -68,16 +65,15 @@ describe('BlueprintApproversForm', () => {
       expect(screen.queryByText(/Current owner assignments for existing roles are unavailable/)).toBeNull();
       expect(screen.queryByText(/Approver selections are temporary/)).toBeNull();
       expect(latest().approvers[roles[0].id]).toBeUndefined();
+      expect(screen.queryByRole('combobox')).toBeNull();
       await userEvent.click(screen.getByRole('checkbox', { name: 'technical@example.com' }));
-      await addViaKeyboard(screen.getByRole('combobox'), 'Business');
+      await userEvent.click(screen.getByRole('checkbox', { name: /Alex Morgan/ }));
       expect(latest().approvers[roles[0].id]).toEqual({
         technical: [{ id: 'api-tech', displayName: 'Technical Owner', email: 'technical@example.com' }],
-        business: [{ id: 'api-biz', displayName: 'Business Owner', email: 'business@example.com' }],
+        business: [DUMMY_BUSINESS_OWNERS[0]],
       });
       expect(get).toHaveBeenCalledWith('/api/v1/approvers/technical');
-      expect(get).toHaveBeenCalledWith('/api/v1/approvers/business', expect.objectContaining({
-        params: { search: 'Business', page: 1, page_size: 100 },
-      }));
+      expect(get).not.toHaveBeenCalledWith('/api/v1/approvers/business', expect.anything());
       await waitFor(() => expect(onReady).toHaveBeenLastCalledWith(true));
     } finally {
       get.mockRestore();
@@ -129,7 +125,7 @@ describe('BlueprintApproversForm', () => {
     await screen.findByText('2 of 3 roles complete');
     const clinops = row('dbx-env-gpd-user-odx-clinops');
     expect(within(clinops).getByRole<HTMLInputElement>('checkbox', { name: 'Jisun.Yoon@Pfizer.com' }).checked).toBe(true);
-    expect(within(clinops).getByText('Anne Croteau')).toBeTruthy();
+    expect(businessGroup(clinops).getByRole<HTMLInputElement>('checkbox', { name: /Anne Croteau/ }).checked).toBe(true);
     expect(within(row('dbx-env-gpd-user-odx-clinops-cdm')).getByRole<HTMLInputElement>('checkbox', { name: 'Sreeram.Koneru@pfizer.com' }).checked).toBe(true);
     const newRow = row(NEW_ROLE);
     expect(within(newRow).getByText('New')).toBeTruthy();
@@ -141,15 +137,17 @@ describe('BlueprintApproversForm', () => {
     expect(onReady).toHaveBeenLastCalledWith(false);
   });
 
-  it('offers only two non-searchable technical owners and searches business owners with duplicate prevention', async () => {
+  it('offers only two technical owners and the dummy business owners without directory search', async () => {
     const service = createMockApproverService({ latencyMs: [0, 0], shouldFail: () => false });
     const search = vi.spyOn(service, 'searchDirectoryUsers');
     const { onReady, latest } = setup({ service });
     await screen.findByText('2 of 3 roles complete');
     const newRow = row(NEW_ROLE);
-    expect(within(newRow).getAllByRole('checkbox').map((input) => input.closest('label')?.textContent))
+    expect(technicalGroup(newRow).getAllByRole('checkbox').map((input) => input.closest('label')?.textContent))
       .toEqual(['Jisun.Yoon@Pfizer.com', 'Sreeram.Koneru@pfizer.com']);
-    expect(within(newRow).queryByRole('combobox', { name: /Technical/ })).toBeNull();
+    expect(businessGroup(newRow).getAllByRole('checkbox').map((input) => input.closest('label')?.textContent))
+      .toEqual(DUMMY_BUSINESS_OWNERS.map((owner) => `${owner.displayName} (${owner.email})`));
+    expect(within(newRow).queryByRole('combobox')).toBeNull();
     const technical = within(newRow).getByRole('checkbox', { name: 'Jisun.Yoon@Pfizer.com' });
     technical.focus();
     await userEvent.keyboard(' ');
@@ -158,17 +156,15 @@ describe('BlueprintApproversForm', () => {
     await userEvent.click(technical);
     await userEvent.click(technical);
     expect(latest().approvers['role-veevaquality'].technical).toHaveLength(2);
-    expect(search).not.toHaveBeenCalled();
-    const business = within(newRow).getByRole('combobox', { name: /Domain\/Business Owner/ });
-    await addViaKeyboard(business, 'Rafael');
-    await userEvent.type(business, 'Rafael');
-    const option = await screen.findByRole('option', { name: /Rafael Moreno \(Already added\)/ }, { timeout: 2000 });
-    expect(option.getAttribute('aria-disabled')).toBe('true');
-    await userEvent.keyboard('{Enter}{Escape}{Escape}');
-    expect(latest().approvers['role-veevaquality'].business).toHaveLength(1);
+    const business = businessGroup(newRow).getByRole('checkbox', { name: /Priya Sharma/ });
+    await userEvent.click(business);
+    expect(latest().approvers['role-veevaquality'].business).toEqual([DUMMY_BUSINESS_OWNERS[1]]);
     expect(await screen.findByText('3 of 3 roles complete')).toBeTruthy();
     expect(screen.queryByText(/missing required approvers/)).toBeNull();
     await waitFor(() => expect(onReady).toHaveBeenLastCalledWith(true));
+    await userEvent.click(business);
+    expect(latest().approvers['role-veevaquality'].business).toEqual([]);
+    expect(search).not.toHaveBeenCalled();
   });
 
   it('uses the fetched technical-owner allowlist for choices and validation', async () => {
@@ -182,7 +178,7 @@ describe('BlueprintApproversForm', () => {
     const { latest } = setup({ service, roleList: [roles[2]] });
     await screen.findByText('0 of 1 roles complete');
     const newRow = row(NEW_ROLE);
-    expect(within(newRow).getAllByRole('checkbox').map((input) => input.getAttribute('aria-label') ?? input.closest('label')?.textContent))
+    expect(technicalGroup(newRow).getAllByRole('checkbox').map((input) => input.getAttribute('aria-label') ?? input.closest('label')?.textContent))
       .toEqual(['one@example.com', 'two@example.com', 'three@example.com']);
     await userEvent.click(within(newRow).getByRole('checkbox', { name: /three@example\.com/ }));
     expect(latest().approvers['role-veevaquality'].technical).toEqual([technicalOwners[2]]);
@@ -197,25 +193,6 @@ describe('BlueprintApproversForm', () => {
     expect(latest().approvers['role-clinops'].technical).toEqual([]);
     expect(within(row('dbx-env-gpd-user-odx-clinops')).getByText('At least one Technical/System Owner is required')).toBeTruthy();
     expect(screen.getByText('1 of 3 roles complete')).toBeTruthy();
-  });
-
-  it('shows empty-search and directory error states in the typeahead', async () => {
-    let fail = false;
-    const service = createMockApproverService({ latencyMs: [0, 0], shouldFail: () => fail });
-    setup({ service });
-    await screen.findByText('2 of 3 roles complete');
-    const input = within(row(NEW_ROLE)).getByRole('combobox');
-    await userEvent.type(input, 'q');
-    expect(screen.getByText('Type at least 2 characters to search.')).toBeTruthy();
-    await userEvent.type(input, 'zzz');
-    expect(await screen.findByText('No users found', {}, { timeout: 2000 })).toBeTruthy();
-    fail = true;
-    await userEvent.clear(input);
-    await userEvent.type(input, 'Ross');
-    expect(await screen.findByText(/simulated mock error/, {}, { timeout: 2000 })).toBeTruthy();
-    fail = false;
-    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    expect(await screen.findByRole('option', { name: /Laura Ross/ }, { timeout: 2000 })).toBeTruthy();
   });
 
   it('filters roles by search text and chips', async () => {
@@ -262,15 +239,6 @@ describe('BlueprintApproversForm', () => {
     expect(latest().approvers['role-clinops-cdm'].business.map((user) => user.displayName)).toEqual(['Kevin Traylor']);
   });
 
-  it('warns when the same person is both technical and business owner', async () => {
-    setup();
-    await screen.findByText('2 of 3 roles complete');
-    const business = within(row('dbx-env-gpd-user-odx-clinops')).getByRole('combobox');
-    await addViaKeyboard(business, 'Jisun');
-    expect(screen.getByText(/Jisun Yoon is assigned as both/)).toBeTruthy();
-    expect(within(row('dbx-env-gpd-user-odx-clinops')).getByText('Complete')).toBeTruthy();
-  });
-
   it('replaces technical owners across filtered-out roles without changing business owners', async () => {
     const { latest } = setup();
     await screen.findByText('2 of 3 roles complete');
@@ -296,7 +264,7 @@ describe('BlueprintApproversForm', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Copy Domain/Business Owners of dbx-env-gpd-user-odx-clinops to all roles' }));
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).queryByRole('checkbox', { name: 'Jisun.Yoon@Pfizer.com' })).toBeNull();
-    expect(within(dialog).getByRole('combobox', { name: /Domain\/Business/ })).toBeTruthy();
+    expect(within(dialog).getByRole('checkbox', { name: /Alex Morgan/ })).toBeTruthy();
     await userEvent.click(within(dialog).getByRole('radio', { name: 'Replace existing' }));
     await userEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
     await userEvent.click(within(dialog).getByRole('button', { name: 'Confirm replace' }));
@@ -330,9 +298,9 @@ describe('BlueprintApproversForm', () => {
     await userEvent.click(choice);
     expect(latest().approvers['role-clinops'].technical).toEqual([]);
     await userEvent.click(choice);
-    await userEvent.click(within(existing).getByRole('button', { name: /Remove API Business Owner/ }));
-    await addViaKeyboard(within(existing).getByRole('combobox'), 'Replacement');
-    expect(latest().approvers['role-clinops'].business).toEqual([replacement]);
+    await userEvent.click(within(existing).getByRole('checkbox', { name: /API Business Owner/ }));
+    await userEvent.click(within(existing).getByRole('checkbox', { name: /Mei Chen/ }));
+    expect(latest().approvers['role-clinops'].business).toEqual([DUMMY_BUSINESS_OWNERS[3]]);
     expect(getRoleApprovers).toHaveBeenCalledOnce();
     expect(latest().approvers['role-veevaquality']).toBeUndefined();
   });

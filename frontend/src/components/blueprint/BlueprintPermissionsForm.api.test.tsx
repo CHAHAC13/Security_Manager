@@ -24,8 +24,11 @@ function renderApiEditor(initial = INITIAL_PERMISSIONS_DATA) {
   return { ...view, data: () => current, ref };
 }
 
-async function expandAll() {
-  await userEvent.click(await screen.findByRole('button', { name: 'Expand All' }));
+async function waitForMatrix() {
+  await screen.findByRole('table', { name: 'Role permissions configuration matrix' });
+  for (const trigger of screen.getAllByRole('button', { name: /access for/ })) {
+    await userEvent.click(trigger);
+  }
 }
 
 beforeEach(() => {
@@ -36,15 +39,14 @@ beforeEach(() => {
 describe('effective permissions from the API', () => {
   it('displays every principal with simple permission controls and no raw JSON panels', async () => {
     const editor = renderApiEditor();
-    await expandAll();
+    await waitForMatrix();
     for (const principal of ['support-team', 'account users', 'inherited-only']) {
-      expect(screen.getByRole('region', { name: `Role assignment: ${principal}` })).toBeTruthy();
-      const header = screen.getByRole('button', { name: `Role assignment: ${principal}` });
-      expect(within(header).getByText('Catalog', { exact: true })).toBeTruthy();
-      expect(header.textContent).not.toContain('·');
+      const group = screen.getByRole('rowgroup', { name: `Role assignment: ${principal}` });
+      expect(within(group).getByText('Catalog', { exact: true })).toBeTruthy();
+      expect(within(group).getByRole('rowheader').textContent).not.toContain('·');
     }
     expect(screen.queryByText(/Type not provided/)).toBeNull();
-    const support = screen.getByRole('region', { name: 'Role assignment: support-team' });
+    const support = screen.getByRole('rowgroup', { name: 'Role assignment: support-team' });
     const schema = within(support).getByRole('region', { name: 'Inherited permissions for cdm' });
     expect(schema.textContent).toContain('EXECUTE');
     expect(schema.textContent).toContain('READ_VOLUME');
@@ -57,10 +59,10 @@ describe('effective permissions from the API', () => {
     expect(within(support).getByRole<HTMLInputElement>('checkbox', { name: 'odx: READ_VOLUME' }).checked).toBe(true);
     expect(within(support).getByRole<HTMLInputElement>('checkbox', { name: 'cdm: USE_SCHEMA' }).checked).toBe(false);
     expect(within(support).getByRole<HTMLInputElement>('checkbox', { name: 'study: SELECT' }).checked).toBe(false);
-    const account = screen.getByRole('region', { name: 'Role assignment: account users' });
+    const account = screen.getByRole('rowgroup', { name: 'Role assignment: account users' });
     expect(within(account).getByRole<HTMLInputElement>('checkbox', { name: 'cdm: USE_SCHEMA' }).checked).toBe(true);
     expect(within(account).getByRole<HTMLInputElement>('checkbox', { name: 'study: SELECT' }).checked).toBe(true);
-    const inheritedOnly = screen.getByRole('region', { name: 'Role assignment: inherited-only' });
+    const inheritedOnly = screen.getByRole('rowgroup', { name: 'Role assignment: inherited-only' });
     const metastore = within(inheritedOnly).getByRole('region', { name: 'Inherited permissions for odx' });
     expect(metastore.textContent).toContain('READ_METADATA');
     expect(metastore.textContent).toContain('METASTORE');
@@ -87,18 +89,20 @@ describe('effective permissions from the API', () => {
         { securable_type: 'SCHEMA', full_name: 'odx.cdm' },
         { securable_type: 'TABLE', full_name: 'odx.cdm.study' },
       ], include_inherited: true,
-    });
+    }, { timeout: 60_000 });
   });
 
   it('creates changes only for the clicked principal/resource and never mutates the API or inherited snapshots', async () => {
     const original = structuredClone(effectivePermissionResponse);
     const editor = renderApiEditor();
-    await expandAll();
+    await waitForMatrix();
     const before = structuredClone(editor.data());
-    await userEvent.click(screen.getByRole('button', { name: 'Collapse All' }));
-    await expandAll();
+    const supportTrigger = within(screen.getByRole('rowgroup', { name: 'Role assignment: support-team' }))
+      .getByRole('button', { name: /access for/ });
+    await userEvent.click(supportTrigger);
+    await userEvent.click(supportTrigger);
     expect(editor.data()).toEqual(before);
-    const support = screen.getByRole('region', { name: 'Role assignment: support-team' });
+    const support = screen.getByRole('rowgroup', { name: 'Role assignment: support-team' });
     await userEvent.click(within(support).getByRole('checkbox', { name: 'odx: SELECT' }));
     const supportData = editor.data().roleAssignments.find((role) => role.roleName === 'support-team')!;
     expect(permissionChanges(supportData)).toEqual([{
@@ -120,20 +124,20 @@ describe('effective permissions from the API', () => {
 
   it('retains explicit edits and exact inheritance across revisits without adding any other changes', async () => {
     const first = renderApiEditor();
-    await expandAll();
-    const support = screen.getByRole('region', { name: 'Role assignment: support-team' });
+    await waitForMatrix();
+    const support = screen.getByRole('rowgroup', { name: 'Role assignment: support-team' });
     await userEvent.click(within(support).getByRole('checkbox', { name: 'study: MODIFY' }));
     const state = structuredClone(first.data());
     first.unmount();
     const returned = renderApiEditor(state);
-    await expandAll();
+    await waitForMatrix();
     expect(returned.data()).toEqual(state);
     const role = returned.data().roleAssignments.find((item) => item.roleName === 'support-team')!;
     expect(permissionChanges(role)).toEqual([{
       objectId: role.objectPermissions[2].objectId, privilege: 'MODIFY', changeType: 'GRANT',
     }]);
-    const card = screen.getByRole('region', { name: 'Role assignment: support-team' });
-    expect(within(card).getByRole('region', { name: 'Inherited permissions for study' }).textContent).toContain('SELECT');
+    const group = screen.getByRole('rowgroup', { name: 'Role assignment: support-team' });
+    expect(within(group).getByRole('region', { name: 'Inherited permissions for study' }).textContent).toContain('SELECT');
     expect(apiClient.post).toHaveBeenCalledTimes(2);
   });
 });

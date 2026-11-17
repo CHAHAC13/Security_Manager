@@ -19,3 +19,11 @@ export const APPROVER_ENDPOINTS = {
   /** GET */
   technicalApprovers: '/api/v1/approvers/technical',
 } as const;
+
+/** Placeholder Domain/Business Owners shown until the directory search is enabled again. */
+export const DUMMY_BUSINESS_OWNERS = [
+  { id: 'dummy-business-1', displayName: 'Alex Morgan', email: 'alex.morgan@example.com', department: 'Clinical Data' },
+  { id: 'dummy-business-2', displayName: 'Priya Sharma', email: 'priya.sharma@example.com', department: 'Commercial Analytics' },
+  { id: 'dummy-business-3', displayName: 'Daniel Okafor', email: 'daniel.okafor@example.com', department: 'Finance' },
+  { id: 'dummy-business-4', displayName: 'Mei Chen', email: 'mei.chen@example.com', department: 'R&D Operations' },
+] as const;

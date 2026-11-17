@@ -1,5 +1,6 @@
 import asyncio
 import re
+from functools import lru_cache
 from typing import Any, cast
 from urllib.parse import quote
 
@@ -15,6 +16,42 @@ APPLICATION_ID_PATTERN = re.compile(
 )
 # Max application IDs combined into one SCIM "or" filter.
 SCIM_FILTER_BATCH_SIZE = 20
+
+# Shared across requests so TLS connections are pooled instead of re-opened
+# for every Databricks call. Bound to the event loop that created it.
+_shared_http_client: httpx.AsyncClient | None = None
+_shared_http_client_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_shared_http_client(timeout_seconds: float) -> httpx.AsyncClient:
+    global _shared_http_client, _shared_http_client_loop
+    loop = asyncio.get_running_loop()
+    if (
+        _shared_http_client is None
+        or _shared_http_client.is_closed
+        or _shared_http_client_loop is not loop
+    ):
+        _shared_http_client = httpx.AsyncClient(
+            timeout=timeout_seconds,
+            follow_redirects=False,
+            limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+        )
+        _shared_http_client_loop = loop
+    return _shared_http_client
+
+
+async def close_shared_http_client() -> None:
+    global _shared_http_client, _shared_http_client_loop
+    if _shared_http_client is not None and not _shared_http_client.is_closed:
+        await _shared_http_client.aclose()
+    _shared_http_client = None
+    _shared_http_client_loop = None
+
+
+@lru_cache(maxsize=8)
+def _get_sdk_config(host: str) -> Config:
+    # Credential resolution is expensive; the SDK refreshes tokens on its own.
+    return Config(host=host)
 
 class DatabricksApiError(Exception):
     def __init__(
@@ -43,7 +80,7 @@ class DatabricksUnityCatalogClient:
 
         # Uses Databricks SDK default credential resolution.
         # Confirm the enterprise-approved identity mechanism before production.
-        config = Config(host=self.settings.normalized_databricks_host)
+        config = _get_sdk_config(self.settings.normalized_databricks_host)
         headers = dict(config.authenticate())
         headers["Accept"] = "application/json"
         return cast(dict[str, str], headers)
@@ -71,17 +108,15 @@ class DatabricksUnityCatalogClient:
     ) -> dict[str, Any]:
         url = f"{self.settings.normalized_databricks_host}{path}"
         try:
-            async with httpx.AsyncClient(
+            client = _get_shared_http_client(self.settings.databricks_timeout_seconds)
+            response = await client.request(
+                method,
+                url=url,
+                headers=self._get_auth_headers(),
+                params=params,
+                json=json_body,
                 timeout=self.settings.databricks_timeout_seconds,
-                follow_redirects=False,
-            ) as client:
-                response = await client.request(
-                    method,
-                    url=url,
-                    headers=self._get_auth_headers(),
-                    params=params,
-                    json=json_body,
-                )
+            )
         except httpx.TimeoutException as exc:
             raise DatabricksApiError(504, "Databricks API request timed out.") from exc
         except httpx.RequestError as exc:

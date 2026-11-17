@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { BlueprintPermissionsForm, type PermissionsFormHandle } from './BlueprintPermissionsForm';
 import { createMockPermissionsService, type PermissionsService } from '@/services/permissionsService';
-import { createRole } from '@/lib/permissions';
+import { createRole, refreshRole } from '@/lib/permissions';
 import { INITIAL_PERMISSIONS_DATA } from '@/types/blueprint';
 import { objects, objectsData } from '@/test/permissionFixtures';
 
@@ -28,24 +28,88 @@ function renderEditor(overrides: Partial<PermissionsService> = {}, initial = INI
   return { ref, data: () => current, onBack };
 }
 
-async function addRole() {
-  await userEvent.click(await screen.findByRole('button', { name: '+ Create Role Assignment' }));
+async function addRole(expand = true) {
+  await userEvent.click(await screen.findByRole('button', { name: 'Create Role Assignment' }));
   await userEvent.click(screen.getByRole('button', { name: 'Add role assignment' }));
   const scopes = screen.getAllByRole('combobox', { name: 'Role scope *' });
   await userEvent.selectOptions(scopes[scopes.length - 1], 'c1');
   const types = screen.getAllByRole('combobox', { name: 'Role Type *' });
   await userEvent.selectOptions(types[types.length - 1], 'user');
+  if (expand) {
+    const groups = screen.getAllByRole('rowgroup', { name: /^Role assignment:/ });
+    await userEvent.click(within(groups[groups.length - 1]).getByRole('button', { name: /access for/ }));
+  }
 }
 
-describe('role assignment cards', () => {
+function paginatedRoles(count: number) {
+  return Array.from({ length: count }, (_, index) => {
+    const role = createRole(`role-${index}`, objects, 'dev', 'user');
+    role.roleName = `dbx-dev-gpd-user-role${index}`;
+    role.roleNameManuallyEdited = true;
+    role.objectPermissions[0].permissions = ['USE CATALOG'];
+    return role;
+  });
+}
+
+describe('role assignment matrix', () => {
+  it('paginates complete groups and preserves grants and expanded access across pages', async () => {
+    const roles = paginatedRoles(6);
+    const editor = renderEditor({}, { roleAssignments: roles, discoveredRoleIds: [] });
+    const first = await screen.findByRole('rowgroup', { name: `Role assignment: ${roles[0].roleName}` });
+    expect(screen.getAllByRole('rowgroup', { name: /^Role assignment:/ })).toHaveLength(5);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Previous role groups page' }).disabled).toBe(true);
+    await userEvent.click(within(first).getByRole('button', { name: /access for/ }));
+    await userEvent.click(within(first).getByRole('checkbox', { name: 'study: SELECT' }));
+    const edited = structuredClone(editor.data());
+    await userEvent.click(screen.getByRole('button', { name: 'Next role groups page' }));
+    expect(screen.getAllByRole('rowgroup', { name: /^Role assignment:/ })).toHaveLength(1);
+    expect(screen.getByText('Role group 06')).toBeTruthy();
+    expect(screen.getByText('Role groups 6-6 of 6 | Page 2 of 2')).toBeTruthy();
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next role groups page' }).disabled).toBe(true);
+    expect(editor.data()).toEqual(edited);
+    await userEvent.click(screen.getByRole('button', { name: 'Previous role groups page' }));
+    const restored = screen.getByRole('rowgroup', { name: `Role assignment: ${roles[0].roleName}` });
+    expect(within(restored).getByRole('button', { name: /access for/ }).getAttribute('aria-expanded')).toBe('true');
+    expect(within(restored).getByRole<HTMLInputElement>('checkbox', { name: 'study: SELECT' }).checked).toBe(true);
+  });
+
+  it('opens the page of an added role and returns to a valid page when its last role is removed', async () => {
+    const editor = renderEditor({}, { roleAssignments: paginatedRoles(5), discoveredRoleIds: [] });
+    await userEvent.click(await screen.findByRole('button', { name: 'Create Role Assignment' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Add role assignment' }));
+    expect(screen.getByText('Role groups 6-6 of 6 | Page 2 of 2')).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Role Name *' })).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(editor.data().roleAssignments).toHaveLength(5);
+    expect(screen.getByText('Role groups 1-5 of 5 | Page 1 of 1')).toBeTruthy();
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next role groups page' }).disabled).toBe(true);
+  });
+
+  it('opens off-page validation errors and also navigates to server errors', async () => {
+    const roles = paginatedRoles(6);
+    roles[5].roleName = '';
+    const editor = renderEditor({}, { roleAssignments: roles, discoveredRoleIds: [] });
+    await screen.findByRole('rowgroup', { name: `Role assignment: ${roles[0].roleName}` });
+    await act(async () => { expect(await editor.ref.current?.validate()).toBe(false); });
+    expect(screen.getByText('Role groups 6-6 of 6 | Page 2 of 2')).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Role Name *' }).getAttribute('aria-invalid')).toBe('true');
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Role Name *' })));
+    await act(async () => {
+      editor.ref.current?.setServerErrors({ roles: { [roles[0].id]: { roleName: 'Name already taken' } } });
+    });
+    expect(screen.getByText('Role groups 1-5 of 6 | Page 1 of 2')).toBeTruthy();
+    expect(screen.getByText('Name already taken')).toBeTruthy();
+  });
+
   it('creates a new role with an empty name and role type', async () => {
     renderEditor();
-    await userEvent.click(await screen.findByRole('button', { name: '+ Create Role Assignment' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Create Role Assignment' }));
     await userEvent.click(screen.getByRole('button', { name: 'Add role assignment' }));
     expect(screen.getByLabelText<HTMLInputElement>('Role Name *').value).toBe('');
     expect(screen.getByLabelText<HTMLSelectElement>('Role Type *').value).toBe('');
     expect(screen.getByLabelText<HTMLSelectElement>('Role scope *').value).toBe('');
     expect(screen.getByPlaceholderText('dbx-<env>-gpd-<role>-<catalog>')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /access for/ })).toBeNull();
   });
   it('validates a read-only long existing name and permits removing its final grant', async () => {
     const selected = [{ ...objects[0], objectName: 'gpdip_iconfirecrest_share_prod' }];
@@ -56,7 +120,7 @@ describe('role assignment cards', () => {
       getExistingRolesForObjects: async () => roles,
       validateRoleName: validateName,
     });
-    await userEvent.click(await screen.findByRole('button', { name: `Role assignment: ${roles[0].roleName}` }));
+    await screen.findByRole('rowgroup', { name: `Role assignment: ${roles[0].roleName}` });
     expect(screen.queryByRole('textbox', { name: 'Role Name *' })).toBeNull();
     await act(async () => { expect(await editor.ref.current?.validate()).toBe(true); });
     await userEvent.click(screen.getByRole('checkbox', { name: 'gpdip_iconfirecrest_share_prod: USE CATALOG' }));
@@ -67,31 +131,48 @@ describe('role assignment cards', () => {
     expect(editor.data().roleAssignments[0].objectPermissions[0].originalPermissions).toEqual(['USE CATALOG']);
     expect(editor.data().roleAssignments[0].objectPermissions[0].permissions).toEqual([]);
   });
-  it('starts existing cards collapsed and newly created cards expanded, with Expand All / Collapse All', async () => {
+  it('keeps role identities and catalog grants visible while expanding descendants independently', async () => {
     const roles = await createMockPermissionsService().getExistingRolesForObjects(objects, 'dev');
-    renderEditor({ getExistingRolesForObjects: async () => roles.slice(0, 1) });
-    const existing = await screen.findByRole('button', { name: `Role assignment: ${roles[0].roleName}` });
-    expect(existing.getAttribute('aria-expanded')).toBe('false');
-    expect(screen.queryByRole('checkbox')).toBeNull();
-    expect(screen.queryByText(/\+0 granted, -0 revoked/)).toBeNull();
-    await addRole();
-    const created = screen.getByRole('textbox', { name: 'Role Name *' });
-    expect(created).toBeTruthy();
-    expect(screen.getByRole('combobox', { name: 'Role Type *' })).toBeTruthy();
-    expect(existing.getAttribute('aria-expanded')).toBe('false');
-    await userEvent.click(screen.getByRole('button', { name: 'Expand All' }));
-    expect(screen.getAllByRole('button', { name: /^Role assignment:/ }).every((button) => button.getAttribute('aria-expanded') === 'true')).toBe(true);
-    await userEvent.click(screen.getByRole('button', { name: 'Collapse All' }));
-    expect(screen.queryByRole('checkbox')).toBeNull();
-    expect(screen.queryByRole('textbox', { name: 'Role Name *' })).toBeNull();
+    const editor = renderEditor({ getExistingRolesForObjects: async () => roles.slice(0, 1) });
+    const existing = await screen.findByRole('rowgroup', { name: `Role assignment: ${roles[0].roleName}` });
+    expect(within(existing).getAllByRole('row')).toHaveLength(1);
+    expect(within(existing).getByRole('rowheader').getAttribute('rowspan')).toBe(String(objects.length));
+    expect(within(existing).getByRole('checkbox', { name: 'odx: USE CATALOG' })).toBeTruthy();
+    expect(within(existing).queryByRole('checkbox', { name: 'study: SELECT' })).toBeNull();
+    await addRole(false);
+    expect(screen.getByRole('textbox', { name: 'Role Name *' })).toBeTruthy();
+    const created = screen.getAllByRole('rowgroup', { name: /^Role assignment:/ })[1];
+    const trigger = within(existing).getByRole('button', { name: /Schema and object access for/ });
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    const before = structuredClone(editor.data());
+    trigger.focus();
+    await userEvent.keyboard('{Enter}');
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(within(existing).getAllByRole('row')).toHaveLength(objects.length);
+    expect(within(created).getAllByRole('row')).toHaveLength(1);
+    expect(editor.data()).toEqual(before);
+    await userEvent.click(within(existing).getByRole('checkbox', { name: 'study: SELECT' }));
+    const edited = structuredClone(editor.data());
+    trigger.focus();
+    await userEvent.keyboard(' ');
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(within(existing).queryByRole('checkbox', { name: 'study: SELECT' })).toBeNull();
+    expect(within(existing).getByText('+0 granted, -1 revoked')).toBeTruthy();
+    expect(within(existing).getByRole('checkbox', { name: 'odx: USE CATALOG' })).toBeTruthy();
+    expect(editor.data()).toEqual(edited);
+    await userEvent.click(trigger);
+    expect(within(existing).getByRole<HTMLInputElement>('checkbox', { name: 'study: SELECT' }).checked).toBe(false);
   });
 
-  it('shows inline privileges only inside scoped cards, with no table or resource-first section', async () => {
+  it('places scoped objects and their privileges in the configuration table', async () => {
     renderEditor();
     await addRole();
-    expect(screen.queryByRole('table')).toBeNull();
+    const table = screen.getByRole('table', { name: 'Role permissions configuration matrix' });
+    expect(within(table).getAllByRole('columnheader').map((header) => header.textContent)).toEqual([
+      'Level / Scope', 'Role Name', 'Object', 'Privileges', 'Request Manager', 'Form Type', 'Display Name', 'Actions',
+    ]);
     expect(screen.queryByRole('region', { name: 'Permissions by resource' })).toBeNull();
-    expect(screen.getByRole('region', { name: 'Objects & Permissions' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Configuration Matrix' }).tabIndex).toBe(0);
     expect(screen.getByRole('checkbox', { name: 'cdm: USE SCHEMA' })).toBeTruthy();
     expect(screen.getByRole('checkbox', { name: 'study: SELECT' })).toBeTruthy();
     expect(screen.getByRole('checkbox', { name: 'lookup: EXECUTE' })).toBeTruthy();
@@ -116,11 +197,11 @@ describe('role assignment cards', () => {
     expect(screen.queryByText(/granted, .*revoked/)).toBeNull();
   });
 
-  it('keeps Request Manager radios inside the card and clears inactive fields', async () => {
+  it('keeps Request Manager settings in role-wide columns and clears inactive fields', async () => {
     const editor = renderEditor();
     await addRole();
     fireEvent.change(screen.getByLabelText('Role Name *'), { target: { value: 'dbx-dev-gpd-user-custom' } });
-    expect(screen.getByRole('button', { name: 'Role assignment: dbx-dev-gpd-user-custom' })).toBeTruthy();
+    expect(screen.getByRole('rowgroup', { name: 'Role assignment: dbx-dev-gpd-user-custom' })).toBeTruthy();
     expect(screen.queryByRole('combobox', { name: 'Available in Request Manager' })).toBeNull();
     expect(screen.getByRole<HTMLInputElement>('radio', { name: 'No' }).checked).toBe(true);
     expect(screen.queryByLabelText('Form Type *')).toBeNull();
@@ -146,6 +227,22 @@ describe('role assignment cards', () => {
     expect(screen.queryByRole('checkbox', { name: 'contacts: SELECT' })).toBeNull();
   });
 
+  it('keeps schema-scope grants visible and only collapses their children, with no accordion for leaf roles', async () => {
+    const schema = refreshRole({ ...createRole('schema-role', objects, 'dev', 'user'), level: 'SCHEMA', scopeObjectId: 's1' }, objects, 'dev');
+    const leaf = refreshRole({ ...createRole('leaf-role', objects, 'dev', 'user'), level: 'OBJECT', scopeObjectId: 't1' }, objects, 'dev');
+    renderEditor({
+      getSelectedObjects: async () => [objects[2], objects[1], objects[0], ...objects.slice(3)],
+    }, { roleAssignments: [schema, leaf], discoveredRoleIds: [] });
+    const schemaGroup = await screen.findByRole('rowgroup', { name: `Role assignment: ${schema.roleName}` });
+    expect(within(schemaGroup).getByRole('checkbox', { name: 'cdm: USE SCHEMA' })).toBeTruthy();
+    expect(within(schemaGroup).queryByRole('checkbox', { name: 'study: SELECT' })).toBeNull();
+    const leafGroup = screen.getByRole('rowgroup', { name: `Role assignment: ${leaf.roleName}` });
+    expect(within(leafGroup).getByRole('checkbox', { name: 'study: SELECT' })).toBeTruthy();
+    expect(within(leafGroup).queryByRole('button', { name: /access for/ })).toBeNull();
+    await userEvent.click(within(schemaGroup).getByRole('button', { name: `Object access for ${schema.roleName}` }));
+    expect(within(schemaGroup).getByRole('checkbox', { name: 'study: SELECT' })).toBeTruthy();
+  });
+
   it('does not infer inherited child permissions from edited catalog grants', async () => {
     const editor = renderEditor();
     await addRole();
@@ -158,13 +255,15 @@ describe('role assignment cards', () => {
   it('shows existing identity as text, tracks revokes and confirms removal from the blueprint', async () => {
     const roles = await createMockPermissionsService().getExistingRolesForObjects(objects, 'dev');
     const editor = renderEditor({ getExistingRolesForObjects: async () => [roles[0]] });
-    await userEvent.click(await screen.findByRole('button', { name: `Role assignment: ${roles[0].roleName}` }));
+    await screen.findByRole('rowgroup', { name: `Role assignment: ${roles[0].roleName}` });
     expect(screen.queryByRole('textbox', { name: 'Role Name *' })).toBeNull();
     expect(screen.queryByLabelText('Level *')).toBeNull();
     expect(screen.queryByLabelText('Role Type *')).toBeNull();
     expect(screen.queryByLabelText('Role scope *')).toBeNull();
     expect(screen.queryByText(/\/32/)).toBeNull();
-    expect(screen.getByText('Catalog · User')).toBeTruthy();
+    expect(screen.getByText('Catalog', { exact: true })).toBeTruthy();
+    expect(screen.getByText('User', { exact: true })).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: /access for/ }));
     await userEvent.click(screen.getByRole('checkbox', { name: 'study: SELECT' }));
     expect(screen.getByText('Pending removal')).toBeTruthy();
     expect(screen.getByText('+0 granted, -1 revoked')).toBeTruthy();
@@ -177,29 +276,34 @@ describe('role assignment cards', () => {
     expect(editor.data().roleAssignments).toHaveLength(0);
   });
 
-  it('keeps checkbox edits when collapsing with Escape and returns focus to the card header', async () => {
+  it('keeps role settings shared while editing different object rows', async () => {
     renderEditor();
     await addRole();
-    const trigger = screen.getByRole('button', { name: /^Role assignment:/ });
-    expect(trigger.getAttribute('aria-expanded')).toBe('true');
-    expect(trigger.querySelector('svg')?.classList.contains('rotate-180')).toBe(true);
+    const group = screen.getByRole('rowgroup', { name: /^Role assignment:/ });
+    expect(within(group).getAllByRole('radio')).toHaveLength(2);
+    await userEvent.click(screen.getByRole('radio', { name: 'Yes' }));
+    await userEvent.selectOptions(screen.getByLabelText('Form Type *'), 'regular');
+    await userEvent.type(screen.getByLabelText('Display Name *'), 'Shared role');
     await userEvent.click(screen.getByRole('checkbox', { name: 'study: SELECT' }));
-    await userEvent.keyboard('{Escape}');
-    expect(trigger.getAttribute('aria-expanded')).toBe('false');
-    expect(document.activeElement).toBe(trigger);
-    await userEvent.click(trigger);
+    await userEvent.click(screen.getByRole('checkbox', { name: 'contacts: SELECT' }));
     expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'study: SELECT' }).checked).toBe(true);
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'contacts: SELECT' }).checked).toBe(true);
+    expect(screen.getAllByLabelText('Display Name *')).toHaveLength(1);
+    expect(screen.getByLabelText<HTMLInputElement>('Display Name *').value).toBe('Shared role');
   });
 
-  it('validates missing grants and Request Manager fields and expands invalid cards', async () => {
+  it('validates missing grants and Request Manager fields and focuses the invalid table field', async () => {
     const editor = renderEditor();
-    await addRole();
-    await userEvent.click(screen.getByRole('button', { name: 'Collapse All' }));
+    await addRole(false);
+    const trigger = screen.getByRole('button', { name: /access for/ });
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
     await act(async () => { expect(await editor.ref.current?.validate()).toBe(false); });
     expect(screen.getByText('Select at least one privilege for this role.')).toBeTruthy();
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-invalid')).toBe('true'));
     await userEvent.click(screen.getByRole('checkbox', { name: 'study: SELECT' }));
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
     await userEvent.click(screen.getByRole('radio', { name: 'Yes' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Collapse All' }));
     await act(async () => { expect(await editor.ref.current?.validate()).toBe(false); });
     expect(screen.getByText('Select a form type.')).toBeTruthy();
     await userEvent.selectOptions(screen.getByLabelText('Form Type *'), 'regular');
@@ -207,27 +311,25 @@ describe('role assignment cards', () => {
     await act(async () => { expect(await editor.ref.current?.validate()).toBe(true); });
   });
 
-  it('surfaces service role name errors in an expanded card', async () => {
+  it('surfaces service role name errors in the role column', async () => {
     const role = createRole('r', objects, 'dev', 'user');
     role.objectPermissions[0].permissions = ['USE CATALOG'];
     const editor = renderEditor({ validateRoleName: async () => ({ valid: false, message: 'Name taken' }) }, { roleAssignments: [role], discoveredRoleIds: [] });
-    await screen.findByRole('button', { name: `Role assignment: ${role.roleName}` });
+    await screen.findByRole('rowgroup', { name: `Role assignment: ${role.roleName}` });
     await act(async () => { expect(await editor.ref.current?.validate()).toBe(false); });
     expect(screen.getByText('Name taken')).toBeTruthy();
   });
 
-  it('searches and attaches existing roles as collapsed cards with their original grants', async () => {
+  it('searches and attaches existing roles with their original grants visible', async () => {
     const editor = renderEditor();
-    await userEvent.click(await screen.findByRole('button', { name: '+ Create Role Assignment' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Create Role Assignment' }));
     await userEvent.selectOptions(screen.getByLabelText('Assignment mode'), 'existing');
     await userEvent.type(screen.getByLabelText('Search existing Databricks roles'), 'support');
     const selector = await screen.findByLabelText<HTMLSelectElement>('Existing role');
     await waitFor(() => expect(selector.options.length).toBeGreaterThan(1));
     await userEvent.selectOptions(selector, selector.options[1].value);
     await userEvent.click(screen.getByRole('button', { name: 'Add role assignment' }));
-    const trigger = screen.getByRole('button', { name: /^Role assignment:/ });
-    expect(trigger.getAttribute('aria-expanded')).toBe('false');
-    await userEvent.click(trigger);
+    expect(screen.getByRole('rowgroup', { name: /^Role assignment:/ })).toBeTruthy();
     expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'odx: USE CATALOG' }).checked).toBe(true);
     expect(editor.data().roleAssignments[0].status).toBe('EXISTING');
   });
@@ -253,7 +355,7 @@ describe('role assignment cards', () => {
     expect(screen.queryByRole('note', { name: 'No role coverage: contacts' })).toBeNull();
   });
 
-  it('includes system schemas and their descendants in discovery and the editable card tree', async () => {
+  it('includes system schemas and their descendants in discovery and the editable table rows', async () => {
     const selected = [
       ...objects,
       { ...objects[1], objectId: 'sys', objectName: 'INFORMATION_SCHEMA' },
@@ -275,7 +377,7 @@ describe('role assignment cards', () => {
     const originals = ['EXECUTE', 'READ VOLUME', 'SELECT', 'USE SCHEMA'];
     role.objectPermissions[0] = { ...role.objectPermissions[0], originalPermissions: [...originals], permissions: [...originals] };
     const editor = renderEditor({ getExistingRolesForObjects: async () => [role] });
-    await userEvent.click(await screen.findByRole('button', { name: `Role assignment: ${role.roleName}` }));
+    await screen.findByRole('rowgroup', { name: `Role assignment: ${role.roleName}` });
     for (const privilege of originals) {
       expect(screen.getByRole<HTMLInputElement>('checkbox', { name: `odx: ${privilege}` }).checked).toBe(true);
     }
@@ -309,5 +411,25 @@ describe('role assignment cards', () => {
     await screen.findByText('No objects have been selected.');
     await userEvent.click(screen.getByRole('button', { name: 'Back to Objects' }));
     expect(editor.onBack).toHaveBeenCalledOnce();
+  });
+
+  it('renders partial role groups as they arrive, keeps edits and blocks Next until loading finishes', async () => {
+    const [first, second] = paginatedRoles(2);
+    let finish!: () => void;
+    const editor = renderEditor({
+      getExistingRolesForObjects: (_objects, _environment, onProgress) => new Promise((resolve) => {
+        onProgress?.([first]);
+        finish = () => resolve([first, second]);
+      }),
+    });
+    const group = await screen.findByRole('rowgroup', { name: `Role assignment: ${first.roleName}` });
+    expect(screen.getByRole('status', { name: 'Loading more role groups' }).textContent).toContain('1 found so far');
+    expect(screen.queryByRole('status', { name: 'Loading permissions' })).toBeNull();
+    await act(async () => { expect(await editor.ref.current?.validate()).toBe(false); });
+    fireEvent.change(within(group).getByRole('textbox', { name: /Role Name/ }), { target: { value: 'edited-while-loading' } });
+    await act(async () => { finish(); });
+    await waitFor(() => expect(screen.queryByRole('status', { name: 'Loading more role groups' })).toBeNull());
+    expect(editor.data().roleAssignments.map((role) => role.id)).toEqual([first.id, second.id]);
+    expect(editor.data().roleAssignments[0].roleName).toBe('edited-while-loading');
   });
 });

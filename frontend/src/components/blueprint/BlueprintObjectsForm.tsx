@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -14,8 +14,9 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { CatalogPicker } from './CatalogPicker';
+import { Toast } from '@/components/ui/Toast';
 import { useObjectDiscovery } from '@/hooks/useObjectDiscovery';
-import { objectDiscoveryService } from '@/services/objectDiscoveryService';
+import { objectDiscoveryService, type DiscoveryPage } from '@/services/objectDiscoveryService';
 import type { BlueprintObjectsData, ObjectKind, ObjectOption, SchemaOption } from '@/types/blueprint';
 
 interface BlueprintObjectsFormProps {
@@ -32,6 +33,32 @@ const KIND_LABELS: Record<string, string> = {
   view: 'View',
   materialized_view: 'Materialized View',
 };
+
+/* Largest page the discovery API accepts; used when fetching every item for "select all". */
+const BULK_PAGE_SIZE = 100;
+
+async function fetchAllPages<T>(load: (cursor: string | null) => Promise<DiscoveryPage<T>>): Promise<T[]> {
+  const items: T[] = [];
+  let cursor: string | null = null;
+  do {
+    const page: DiscoveryPage<T> = await load(cursor);
+    items.push(...page.items);
+    cursor = page.nextCursor;
+  } while (cursor);
+  return items;
+}
+
+function uniqueById<T extends { id: string }>(items: T[]): T[] {
+  return [...new Map(items.map((item) => [item.id, item])).values()];
+}
+
+function fetchAllSchemas(catalogId: string): Promise<SchemaOption[]> {
+  return fetchAllPages((cursor) => objectDiscoveryService.getSchemas(catalogId, { limit: BULK_PAGE_SIZE, cursor }));
+}
+
+function fetchAllObjects(catalogId: string, schemaId: string): Promise<ObjectOption[]> {
+  return fetchAllPages((cursor) => objectDiscoveryService.getObjects(catalogId, schemaId, { limit: BULK_PAGE_SIZE, cursor }));
+}
 
 function ObjectIcon({ kind }: { kind: string }) {
   if (kind === 'view' || kind === 'materialized_view')
@@ -95,13 +122,17 @@ export function BlueprintObjectsForm({ data, onChange, onCheckingChange, onBefor
   const [proposalKind, setProposalKind] = useState<ObjectKind>('table');
   const [proposalError, setProposalError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const checkController = useRef<AbortController | null>(null);
   useEffect(() => () => checkController.current?.abort(), []);
   useEffect(() => {
-    onCheckingChange?.(checking);
+    onCheckingChange?.(checking || bulkBusy);
     return () => onCheckingChange?.(false);
-  }, [checking, onCheckingChange]);
+  }, [checking, bulkBusy, onCheckingChange]);
   const [catalogSearch, setCatalogSearch] = useState('');
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkMessage, setBulkMessage] = useState<string | null>(null);
+  const dismissBulkMessage = useCallback(() => setBulkMessage(null), []);
   const proposedCatalog = data.proposedCatalogs.find((catalog) => catalog.id === data.selectedCatalogId);
   const proposedSchema = data.proposedSchemas.find((schema) => schema.id === data.focusedSchemaId
     && schema.catalogId === data.selectedCatalogId);
@@ -126,6 +157,17 @@ export function BlueprintObjectsForm({ data, onChange, onCheckingChange, onBefor
     ? 0
     : discovery.schemas.pageIndex * 5 + 1;
   const schemaPageEnd = schemaPageStart + visibleSchemas.length - 1;
+
+  const schemaTotal = (discovery.schemas.totalItems ?? 0) + proposedSchemas.length;
+  const allSchemasSelected = schemaTotal > 0 && selectedSchemaCount >= schemaTotal;
+  const proposedObjectsInFocus = focusedSchema
+    ? data.proposedObjects.filter((object) => object.catalogId === data.selectedCatalogId && object.schemaId === focusedSchema.id)
+    : [];
+  const selectedObjectsInFocus = focusedSchema
+    ? data.selectedObjects.filter((object) => object.schemaId === focusedSchema.id).length
+    : 0;
+  const focusedObjectTotal = (discovery.objects.totalItems ?? 0) + proposedObjectsInFocus.length;
+  const allObjectsInFocusSelected = focusedObjectTotal > 0 && selectedObjectsInFocus >= focusedObjectTotal;
 
   /* ── Event handlers ── */
 
@@ -371,6 +413,79 @@ export function BlueprintObjectsForm({ data, onChange, onCheckingChange, onBefor
     });
   }
 
+  async function runBulkSelection(action: () => Promise<void>, successMessage: string) {
+    setActiveCreation(null);
+    setProposalError(null);
+    setBulkError(null);
+    setBulkMessage(null);
+    setBulkBusy(true);
+    try {
+      await action();
+      setBulkMessage(successMessage);
+    } catch (error) {
+      setBulkError(error instanceof Error ? error.message : 'Selection failed');
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  function toggleSelectAllSchemas() {
+    if (allSchemasSelected) {
+      onChange({
+        ...data,
+        selectedSchemaIds: [],
+        selectedSchemas: [],
+        selectedObjectIds: [],
+        selectedObjects: [],
+        focusedSchemaId: null,
+      });
+      return;
+    }
+    const catalogId = data.selectedCatalogId;
+    void runBulkSelection(async () => {
+      const remoteSchemas = proposedCatalog ? [] : await fetchAllSchemas(catalogId);
+      const allSchemas = uniqueById([...remoteSchemas, ...proposedSchemas]);
+      const objects: ObjectOption[] = [];
+      for (const schema of remoteSchemas) {
+        objects.push(...await fetchAllObjects(catalogId, schema.id));
+      }
+      const proposed = data.proposedObjects.filter((object) => object.catalogId === catalogId);
+      onChange({
+        ...data,
+        selectedSchemaIds: allSchemas.map((schema) => schema.id),
+        selectedSchemas: allSchemas,
+        ...objectSelection([...objects, ...proposed]),
+      });
+    }, 'All schemas and objects selected.');
+  }
+
+  function objectSelection(objects: ObjectOption[]) {
+    return {
+      selectedObjectIds: [...new Set([...data.selectedObjectIds, ...objects.map((object) => object.id)])],
+      selectedObjects: uniqueById([...data.selectedObjects, ...objects]),
+    };
+  }
+
+  function toggleSelectAllObjectsInFocus() {
+    if (!focusedSchema) return;
+    const schemaId = focusedSchema.id;
+    if (allObjectsInFocusSelected) {
+      const removedIds = new Set(data.selectedObjects.filter((object) => object.schemaId === schemaId).map((object) => object.id));
+      onChange({
+        ...data,
+        selectedObjectIds: data.selectedObjectIds.filter((id) => !removedIds.has(id)),
+        selectedObjects: data.selectedObjects.filter((object) => object.schemaId !== schemaId),
+      });
+      return;
+    }
+    const catalogId = data.selectedCatalogId;
+    const isRemote = schemas.some((schema) => schema.id === schemaId);
+    void runBulkSelection(async () => {
+      const remote = isRemote ? await fetchAllObjects(catalogId, schemaId) : [];
+      onChange({ ...data, ...objectSelection([...remote, ...proposedObjectsInFocus]) });
+    }, `All objects in ${focusedSchema.name} selected.`);
+  }
+
   /* How many objects are scoped for a given schema */
   function scopedObjectCount(schemaId: string): number {
     const schemaObjIds = new Set(
@@ -380,7 +495,7 @@ export function BlueprintObjectsForm({ data, onChange, onCheckingChange, onBefor
   }
 
   return (
-    <fieldset disabled={checking} className="grid min-w-0 grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+    <fieldset disabled={checking || bulkBusy} className="grid min-w-0 grid-cols-1 lg:grid-cols-12 gap-6 items-start">
       {/* ── Left: Object Wizard Card ── */}
       <div className="lg:col-span-8 xl:col-span-9 bg-white rounded-xl p-6 shadow-sm border border-slate-200 space-y-6">
         {/* Card header */}
@@ -394,6 +509,9 @@ export function BlueprintObjectsForm({ data, onChange, onCheckingChange, onBefor
             Step 2: Hierarchy Mapping
           </span>
         </div>
+        {bulkBusy && <Toast message="Selecting resources..." variant="loading" onDismiss={dismissBulkMessage} className="bottom-auto top-16" />}
+        {!bulkBusy && bulkMessage && <Toast message={bulkMessage} onDismiss={dismissBulkMessage} className="bottom-auto top-16" />}
+        {bulkError && <p role="alert" className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">{bulkError}</p>}
 
         {/* 1 ─ Catalog Selection */}
         <div className="flex flex-col gap-3 bg-slate-50/60 border border-slate-200/60 rounded-xl p-5">
@@ -462,10 +580,23 @@ export function BlueprintObjectsForm({ data, onChange, onCheckingChange, onBefor
                   </span>
                 </span>
               </div>
-              <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
-                {selectedSchemaCount} selected · Showing {schemaPageStart}-{schemaPageEnd} of {totalSchemaCount} loaded
-                {discovery.schemas.hasNextPage ? ' · more available' : ''}
-              </span>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-1.5 text-[11px] font-medium text-slate-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all schemas"
+                    checked={allSchemasSelected}
+                    disabled={schemaTotal === 0}
+                    onChange={toggleSelectAllSchemas}
+                    className="w-4 h-4 rounded text-sky-600 border-slate-300 focus:ring-0 focus:ring-offset-0 cursor-pointer disabled:cursor-not-allowed"
+                  />
+                  Select all
+                </label>
+                <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                  {selectedSchemaCount} selected · Showing {schemaPageStart}-{schemaPageEnd} of {totalSchemaCount} loaded
+                  {discovery.schemas.hasNextPage ? ' · more available' : ''}
+                </span>
+              </div>
             </div>
 
             {discovery.schemas.error && (
@@ -622,6 +753,19 @@ export function BlueprintObjectsForm({ data, onChange, onCheckingChange, onBefor
                 <span className="text-[11px] font-mono font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">
                   {focusedSchema.name}
                 </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-4 mt-2">
+                <label className="flex items-center gap-1.5 text-[11px] font-medium text-slate-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select all objects in ${focusedSchema.name}`}
+                    checked={allObjectsInFocusSelected}
+                    disabled={focusedObjectTotal === 0}
+                    onChange={toggleSelectAllObjectsInFocus}
+                    className="w-4 h-4 rounded text-sky-600 border-slate-300 focus:ring-0 focus:ring-offset-0 cursor-pointer disabled:cursor-not-allowed"
+                  />
+                  Select all objects in this schema
+                </label>
               </div>
             </div>
 
