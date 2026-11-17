@@ -57,14 +57,33 @@ a scope and type still offers the existing generated name.
 
 ## Blueprint Permissions (Step 3)
 
-The Permissions editor uses collapsible Role Assignment cards. Each single-line
-header shows the role name, New/Existing badge, level and role type, with grant/
-revoke counts only when privileges have changed. Cards start collapsed except
-newly created roles. Expand All / Collapse All controls change card visibility
-without changing assignments or grants.
+The Permissions editor uses a Configuration Matrix with columns for level/scope,
+role name/type, object, privileges, Request Manager, form type, display name and
+removal actions. Each role is a row group: role-wide settings span its object
+rows, and each object has its own inline direct-grant checkboxes and read-only
+inherited permissions. Role identity, Request Manager settings and scope-level
+grants stay visible. Catalog roles expose a collapsed "Schema & object access"
+accordion for their descendants; schema roles expose "Object access". Leaf
+object roles have no accordion. Each role expands independently without changing
+grants, pending-change counts or the wizard's saved state.
+The matrix shows five complete role groups per page with Previous/Next controls.
+Edits and expanded access sections survive page changes. Adding a role opens its
+page; removing the last role on a page returns to the preceding page. Validation
+checks all pages and opens the first role with an error.
+The table supports keyboard focus and horizontal scrolling on smaller screens.
+Each page grows with its expanded role groups, using the normal page scroll
+instead of an internal vertical scrollbar.
+Hidden accessibility labels are contained within the table's scroll region to
+avoid an extra document scrollbar.
+New/Existing badges and grant/revoke counts remain visible beside each role.
+Numbered role-group labels, alternating white/sky backgrounds and two-pixel group
+separators distinguish assignments. Softer single-pixel grid lines delineate
+object rows and columns, with a blue accent along each group's left edge.
+Resource types use labeled, color-coded icon badges for catalogs, schemas,
+tables, views and functions; existing role levels use the same badge treatment.
+Tables and views share green badges, with distinct icons to identify each type.
 
-Each expanded card owns its Objects & Permissions tree, containing only that
-role's scope and descendants, with inline privilege checkboxes. Edits target
+Each role group contains only its scope and selected descendants. Edits target
 exactly one role-ID/object-ID record. Different roles never share grants merely
 because they reference the same resource. There is no separate resource-first
 section or privilege dropdown.
@@ -72,20 +91,20 @@ section or privilege dropdown.
 New roles retain editable level, scope, role type and role name controls.
 Existing identity is read-only text, with no disabled identity dropdowns or name
 counter. Removing an existing assignment uses "Remove from blueprint" and requires
-confirmation. Request Manager uses Yes/No radios inside each card; Form Type and
-Display Name appear only for Yes.
+confirmation. Request Manager uses Yes/No radios in its own column; Form Type and
+Display Name are editable only for Yes and otherwise show "Not applicable".
 
 The global creation button supports creating or searching existing roles. The
 only resource-specific creation shortcut appears in warnings for new leaf
 objects with no role coverage; it preselects that object's scope. Parent-scoped
 roles count as coverage. All selected schemas, including `information_schema`,
-and their selected descendants are included in discovery, role scopes and trees;
+and their selected descendants are included in discovery, role scopes and rows;
 there is currently no system-schema exclusion.
 Mock role names use the same environment/type/catalog/scope naming helper as new
 roles, without generated display-name suffixes.
 
-Validation expands invalid cards before focusing the first invalid field.
-Escape collapses the active card and returns focus to its header.
+Validation displays inline errors, expands access for roles with privilege errors
+and focuses the first invalid field, scrolling it into view within the matrix.
 
 The editor uses the existing wizard-owned state, shared footer, buttons and
 badges. The environment remains `dev` by default in wizard state; Setup does not
@@ -138,7 +157,7 @@ The single-catalog Objects picker is unchanged.
   preserved, not generated or classified by naming conventions. Catalog scope
   is an editor grouping, not a claim about a principal's actual Databricks role
   level. The endpoint can return groups, users and service principals without
-  distinguishing them; missing role types are omitted from card headers without
+  distinguishing them; missing role types are omitted from role cells without
   a placeholder or separator. The Role Type selector remains available for new
   roles. Request Manager fields start unset because discovery provides no
   such metadata; they are local editor values, not authoritative server settings.
@@ -204,7 +223,7 @@ does not delete the Databricks role.
 Inheritance displays use only the API records for the **same principal/resource**,
 not parent-grant guesses. Editing a catalog does not change any inherited
 snapshot or child checkbox. Inherited records never participate in grant/revoke
-diffs. Opening/collapsing cards, searching and revisiting Permissions do not
+diffs. Viewing the matrix, searching and revisiting Permissions do not
 create changes; only explicit edits to direct-grant checkboxes do.
 Request Manager No clears its
 inactive form/display fields while retaining original settings for change

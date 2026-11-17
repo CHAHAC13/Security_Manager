@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { AxiosError } from 'axios';
 import apiClient from '@/lib/apiClient';
 import { permissionChanges, reconcilePermissions, validatePermissions } from '@/lib/permissions';
 import { createDeploymentData } from '@/lib/deployment';
@@ -37,7 +38,7 @@ describe('permissions API adapter', () => {
         { securable_type: 'TABLE', full_name: 'odx.cdm.study' },
       ],
       include_inherited: true,
-    });
+    }, { timeout: 60_000 });
     expect(roles.map((role) => role.roleName)).toEqual(['Data Readers', 'writers']);
     const [readers, writers] = roles;
     expect(readers).toMatchObject({
@@ -73,7 +74,7 @@ describe('permissions API adapter', () => {
         { securable_type: 'SCHEMA', full_name: 'odx.cdm' },
         { securable_type: 'VIEW', full_name: 'odx.cdm.study' },
       ], include_inherited: true,
-    });
+    }, { timeout: 60_000 });
   });
 
   it('keeps all API-discovered catalog grants checked and valid without inventing removals', async () => {
@@ -105,7 +106,7 @@ describe('permissions API adapter', () => {
     expect(apiClient.post).not.toHaveBeenCalled();
   });
 
-  it('batches at the exact 100-securable backend limit and merges principals across batches', async () => {
+  it('sends small parallel batches, merges principals across batches and reports timeouts', async () => {
     const selected: PermissionObject[] = [
       objects[0],
       ...Array.from({ length: 100 }, (_, index): PermissionObject => ({
@@ -113,22 +114,39 @@ describe('permissions API adapter', () => {
         status: 'EXISTING', parentId: objects[0].objectId,
       })),
     ];
-    vi.mocked(apiClient.post)
-      .mockResolvedValueOnce({ data: [assignment('SCHEMA', 'odx.schema0', 'readers', ['USE_SCHEMA'])] })
-      .mockResolvedValueOnce({ data: [assignment('SCHEMA', 'odx.schema99', 'readers', ['USE_SCHEMA'])] });
-    const roles = await apiPermissionsService.getExistingRolesForObjects(selected, 'dev');
-    expect(apiClient.post).toHaveBeenCalledTimes(2);
-    for (const [index, batch] of [selected.slice(0, 100), selected.slice(100)].entries()) {
-      expect(apiClient.post).toHaveBeenNthCalledWith(index + 1, '/api/v1/discovery/privileges', {
-        securables: batch.map((object) => ({
-          securable_type: object.objectType,
-          full_name: object.objectType === 'CATALOG' ? 'odx' : `odx.${object.objectName}`,
-        })),
-        include_inherited: true,
-      });
-    }
+    let inFlight = 0;
+    let maxInFlight = 0;
+    vi.mocked(apiClient.post).mockImplementation(async (_url, body) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await Promise.resolve();
+      inFlight -= 1;
+      const names = (body as { securables: { full_name: string }[] }).securables.map((item) => item.full_name);
+      return { data: ['odx.schema0', 'odx.schema99']
+        .filter((name) => names.includes(name))
+        .map((name) => assignment('SCHEMA', name, 'readers', ['USE_SCHEMA'])) };
+    });
+    const progress = vi.fn();
+    const roles = await apiPermissionsService.getExistingRolesForObjects(selected, 'dev', progress);
+    expect(apiClient.post).toHaveBeenCalledTimes(5);
+    expect(maxInFlight).toBe(4);
+    // Partial snapshots are emitted for batches 1-4; the 5th completes the final result instead.
+    expect(progress).toHaveBeenCalledTimes(4);
+    const firstPartial = progress.mock.calls[0][0] as typeof roles;
+    expect(firstPartial.map((role) => role.roleName)).toEqual(['readers']);
+    expect(firstPartial[0].objectPermissions.filter((item) => item.permissions.length)).toHaveLength(1);
+    const sent = vi.mocked(apiClient.post).mock.calls
+      .flatMap(([, body]) => (body as { securables: unknown[] }).securables);
+    expect(sent).toEqual(selected.map((object) => ({
+      securable_type: object.objectType,
+      full_name: object.objectType === 'CATALOG' ? 'odx' : `odx.${object.objectName}`,
+    })));
     expect(roles).toHaveLength(1);
     expect(roles[0].objectPermissions.filter((item) => item.permissions.length)).toHaveLength(2);
+
+    vi.mocked(apiClient.post).mockRejectedValue(new AxiosError('timeout of 60000ms exceeded', 'ECONNABORTED'));
+    await expect(apiPermissionsService.getExistingRolesForObjects(objects, 'dev'))
+      .rejects.toThrow('Loading existing role groups timed out. Please try again.');
   });
 
   it('filters search using actual principals returned for the selected scope', async () => {

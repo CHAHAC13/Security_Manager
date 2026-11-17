@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { BlueprintObjectsForm } from './BlueprintObjectsForm';
-import { INITIAL_OBJECTS_DATA } from '@/types/blueprint';
-import { objectDiscoveryService } from '@/services/objectDiscoveryService';
+import { INITIAL_OBJECTS_DATA, type BlueprintObjectsData, type SchemaOption } from '@/types/blueprint';
+import { objectDiscoveryService, type DiscoveryPage } from '@/services/objectDiscoveryService';
 
 vi.mock('@/services/objectDiscoveryService', () => ({
   objectDiscoveryService: {
@@ -13,9 +13,9 @@ vi.mock('@/services/objectDiscoveryService', () => ({
   },
 }));
 
-function renderObjects() {
+function renderObjects(initialData: BlueprintObjectsData = INITIAL_OBJECTS_DATA) {
   function Harness() {
-    const [data, setData] = useState(INITIAL_OBJECTS_DATA);
+    const [data, setData] = useState(initialData);
     return <BlueprintObjectsForm data={data} onChange={setData} />;
   }
   render(<Harness />);
@@ -121,5 +121,156 @@ describe('Objects page pagination totals', () => {
     expect(screen.getByText('Schemas · Page 1 of 2')).toBeTruthy();
     fireEvent.click(pagination('Schemas', 1, 2).getByRole('button', { name: 'Next' }));
     await waitFor(() => expect(screen.getByText('Schemas · Page 2 of 2')).toBeTruthy());
+  });
+});
+
+describe('Objects page select all', () => {
+  it('shows only checked or empty boxes and keeps the loading toast until selection finishes', async () => {
+    const schemaPage = {
+      items: [
+        { id: 'toast-alpha', name: 'Toast Alpha', catalogId: 'toast-catalog' },
+        { id: 'toast-beta', name: 'Toast Beta', catalogId: 'toast-catalog' },
+      ],
+      nextCursor: null, totalItems: 2, totalPages: 1,
+    };
+    let finishBulk!: (page: DiscoveryPage<SchemaOption>) => void;
+    const bulkPage = new Promise<DiscoveryPage<SchemaOption>>((resolve) => { finishBulk = resolve; });
+    vi.mocked(objectDiscoveryService.getSchemas).mockImplementation(async (_catalog, request) =>
+      request.limit === 100 ? bulkPage : schemaPage);
+    vi.mocked(objectDiscoveryService.getObjects).mockImplementation(async (_catalog, schemaId) => ({
+      items: [
+        { id: `${schemaId}.one`, name: 'One', schemaId, kind: 'table' as const },
+        { id: `${schemaId}.two`, name: 'Two', schemaId, kind: 'table' as const },
+      ],
+      nextCursor: null, totalItems: 2, totalPages: 1,
+    }));
+    renderObjects({ ...INITIAL_OBJECTS_DATA, selectedCatalogId: 'toast-catalog' });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Toast Alpha' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /^One\[/ }));
+    const schemaAll = screen.getByRole<HTMLInputElement>('checkbox', { name: 'Select all schemas' });
+    const objectAll = screen.getByRole<HTMLInputElement>('checkbox', { name: 'Select all objects in Toast Alpha' });
+    expect(schemaAll.checked).toBe(false);
+    expect(schemaAll.indeterminate).toBe(false);
+    expect(objectAll.checked).toBe(false);
+    expect(objectAll.indeterminate).toBe(false);
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(schemaAll);
+      const loadingToast = screen.getByText('Selecting resources...').closest('[role="status"]');
+      expect(loadingToast?.classList.contains('top-16')).toBe(true);
+      expect(loadingToast?.classList.contains('bottom-auto')).toBe(true);
+      expect(screen.queryByRole('button', { name: 'Dismiss notification' })).toBeNull();
+      await act(async () => { vi.advanceTimersByTime(5000); });
+      expect(screen.getByText('Selecting resources...')).toBeTruthy();
+      await act(async () => { finishBulk(schemaPage); await bulkPage; });
+      expect(screen.queryByText('Selecting resources...')).toBeNull();
+      const successToast = screen.getByText('All schemas and objects selected.').closest('[role="status"]');
+      expect(successToast?.classList.contains('top-16')).toBe(true);
+      expect(successToast?.classList.contains('bottom-auto')).toBe(true);
+      expect(schemaAll.checked).toBe(true);
+      expect(objectAll.checked).toBe(true);
+      await act(async () => { vi.advanceTimersByTime(4000); });
+      expect(screen.queryByText('All schemas and objects selected.')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('selects every schema across pages and every object across all schemas', async () => {
+    vi.mocked(objectDiscoveryService.getCatalogs).mockResolvedValue({
+      items: [{ id: 'select-all-catalog', name: 'Select All Catalog' }],
+      nextCursor: null, totalItems: 1, totalPages: 1,
+    });
+    vi.mocked(objectDiscoveryService.getSchemas).mockImplementation(async (catalogId, request) => {
+      const isFirstPage = !request.cursor || request.cursor === '1';
+      return {
+        items: isFirstPage
+          ? [{ id: 'alpha', name: 'Alpha', catalogId }]
+          : [{ id: 'beta', name: 'Beta', catalogId }],
+        nextCursor: isFirstPage ? '2' : null, totalItems: 2, totalPages: 2,
+      };
+    });
+    vi.mocked(objectDiscoveryService.getObjects).mockImplementation(async (_catalog, schemaId, request) => {
+      const secondPage = request.cursor === '2';
+      const object = schemaId === 'alpha'
+        ? { id: secondPage ? 'alpha.t2' : 'alpha.t1', name: secondPage ? 't2' : 't1', schemaId, kind: 'table' as const }
+        : { id: 'beta.v1', name: 'v1', schemaId, kind: 'view' as const };
+      return {
+        items: [object], nextCursor: schemaId === 'alpha' && !secondPage ? '2' : null,
+        totalItems: schemaId === 'alpha' ? 2 : 1, totalPages: schemaId === 'alpha' ? 2 : 1,
+      };
+    });
+    renderObjects();
+    fireEvent.click(screen.getByRole('button', { name: 'Catalog selection: Select a catalog' }));
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search catalogs' }), { target: { value: 'select all' } });
+    fireEvent.click(await screen.findByRole('button', { name: /Select All Catalog/ }, { timeout: 4000 }));
+
+    const selectAllSchemas = await screen.findByRole<HTMLInputElement>('checkbox', { name: 'Select all schemas' });
+    await waitFor(() => expect(selectAllSchemas.disabled).toBe(false));
+
+    fireEvent.click(selectAllSchemas);
+    await waitFor(() => expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'Alpha' }).checked).toBe(true));
+
+    fireEvent.click(pagination('Schemas', 1, 2).getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'Beta' }).checked).toBe(true));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Alpha' }));
+    await screen.findByRole('checkbox', { name: /^t1\[/ });
+    const alphaAll = screen.getByRole<HTMLInputElement>('checkbox', { name: 'Select all objects in Alpha' });
+    expect(alphaAll.checked).toBe(true);
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: /^t1\[/ }).checked).toBe(true);
+    fireEvent.click(pagination('Objects', 1, 2).getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByRole<HTMLInputElement>('checkbox', { name: /^t2\[/ }).checked).toBe(true));
+    fireEvent.click(alphaAll);
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: /^t2\[/ }).checked).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Beta' }));
+    await waitFor(() => expect(screen.getByRole<HTMLInputElement>('checkbox', { name: /^v1\[/ }).checked).toBe(true));
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'Select all objects in Beta' }).checked).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Alpha' }));
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'Select all objects in Alpha' }).checked).toBe(false);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select all objects in Alpha' }));
+    await waitFor(() => expect(screen.getByRole<HTMLInputElement>('checkbox', { name: /^t2\[/ }).checked).toBe(true));
+    expect(await screen.findByText('All objects in Alpha selected.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Beta' }));
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: /^v1\[/ }).checked).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Select all objects across all schemas' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Clear all objects' })).toBeNull();
+  });
+
+  it('selects proposed schemas and objects without discovering a proposed catalog', async () => {
+    const catalog = { id: 'new-catalog', name: 'New Catalog', source: 'new' as const };
+    const schema = { id: 'new-schema', name: 'New Schema', catalogId: catalog.id, source: 'new' as const };
+    const object = { id: 'new-object', name: 'New Object', schemaId: schema.id, catalogId: catalog.id,
+      kind: 'table' as const, source: 'new' as const };
+    vi.mocked(objectDiscoveryService.getSchemas).mockClear();
+    vi.mocked(objectDiscoveryService.getObjects).mockClear();
+    renderObjects({ ...INITIAL_OBJECTS_DATA, selectedCatalogId: catalog.id, selectedCatalog: catalog,
+      proposedCatalogs: [catalog], proposedSchemas: [schema], proposedObjects: [object] });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select all schemas' }));
+    await waitFor(() => expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'New Schema' }).checked).toBe(true));
+    fireEvent.click(screen.getByRole('button', { name: 'New Schema' }));
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'Select all objects in New Schema' }).checked).toBe(true);
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: /^New Object\[/ }).checked).toBe(true);
+    expect(objectDiscoveryService.getSchemas).not.toHaveBeenCalled();
+    expect(objectDiscoveryService.getObjects).not.toHaveBeenCalled();
+  });
+
+  it('does not partially select schemas or objects when a bulk object fetch fails', async () => {
+    vi.mocked(objectDiscoveryService.getSchemas).mockResolvedValue({
+      items: [{ id: 'failing-schema', name: 'Failing Schema', catalogId: 'failure-catalog' }],
+      nextCursor: null, totalItems: 1, totalPages: 1,
+    });
+    vi.mocked(objectDiscoveryService.getObjects).mockRejectedValue(new Error('Objects unavailable'));
+    renderObjects({ ...INITIAL_OBJECTS_DATA, selectedCatalogId: 'failure-catalog' });
+    await screen.findByRole('checkbox', { name: 'Failing Schema' });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select all schemas' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('Objects unavailable');
+    expect(screen.queryByText('Selecting resources...')).toBeNull();
+    expect(screen.queryByText('All schemas and objects selected.')).toBeNull();
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'Failing Schema' }).checked).toBe(false);
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'Select all schemas' }).checked).toBe(false);
   });
 });

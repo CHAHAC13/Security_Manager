@@ -541,11 +541,18 @@ async def get_privileges(
             databricks_type = to_databricks_securable_type(
                 selection.securable_type
             )
-            assignments = await client.get_privilege_assignments(
-                securable_type=databricks_type,
-                full_name=selection.full_name,
-                effective=request.include_inherited,
+            cache_key = (
+                f"privileges:{databricks_type}:{selection.full_name}"
+                f":{request.include_inherited}"
             )
+            assignments = await discovery_cache.get(cache_key)
+            if assignments is None:
+                assignments = await client.get_privilege_assignments(
+                    securable_type=databricks_type,
+                    full_name=selection.full_name,
+                    effective=request.include_inherited,
+                )
+                await discovery_cache.set(cache_key, assignments)
             mapped_assignments: list[ObjectPrivilegeResponse] = []
             for assignment in assignments:
                 mapped = map_privilege_assignment(

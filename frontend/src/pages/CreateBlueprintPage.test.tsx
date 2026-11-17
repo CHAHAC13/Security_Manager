@@ -42,17 +42,19 @@ async function enterPermissions(overrides: Partial<PermissionsService> = {}, app
   await userEvent.click(screen.getByRole('button', { name: 'Next' }));
   await userEvent.click(screen.getByRole('button', { name: 'Select test objects' }));
   await userEvent.click(screen.getByRole('button', { name: 'Next' }));
-  await screen.findByRole('button', { name: '+ Create Role Assignment' });
+  await screen.findByRole('button', { name: 'Create Role Assignment' });
   return service;
 }
 
 async function addRole() {
-  await userEvent.click(screen.getByRole('button', { name: '+ Create Role Assignment' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Create Role Assignment' }));
   await userEvent.click(screen.getByRole('button', { name: 'Add role assignment' }));
   const scopes = screen.getAllByRole('combobox', { name: 'Role scope *' });
   await userEvent.selectOptions(scopes[scopes.length - 1], 'c1');
   const types = screen.getAllByRole('combobox', { name: 'Role Type *' });
   await userEvent.selectOptions(types[types.length - 1], 'user');
+  const groups = screen.getAllByRole('rowgroup', { name: /^Role assignment:/ });
+  await userEvent.click(within(groups[groups.length - 1]).getByRole('button', { name: /access for/ }));
 }
 
 describe('wizard permissions integration', () => {
@@ -158,7 +160,7 @@ describe('wizard permissions integration', () => {
     await userEvent.type(nameInput, 'Updated review test blueprint');
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
-    await screen.findByRole('button', { name: '+ Create Role Assignment' });
+    await screen.findByRole('button', { name: 'Create Role Assignment' });
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
     await screen.findByText(/No changes require approval/);
     await userEvent.click(screen.getByRole('button', { name: 'Next: Deployment' }));
@@ -211,8 +213,8 @@ describe('wizard permissions integration', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Back' }));
     await screen.findByText(/No changes require approval/);
     await userEvent.click(screen.getByRole('button', { name: 'Back' }));
-    await screen.findByRole('button', { name: '+ Create Role Assignment' });
-    await userEvent.click(screen.getByRole('button', { name: 'Expand All' }));
+    await screen.findByRole('button', { name: 'Create Role Assignment' });
+    await userEvent.click(screen.getByRole('button', { name: /access for/ }));
     await userEvent.click(screen.getByRole('checkbox', { name: 'study: SELECT' }));
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
     await screen.findByText('1 of 1 roles complete');
@@ -220,8 +222,8 @@ describe('wizard permissions integration', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save Draft' }));
     await waitFor(() => expect(saveApprovers).toHaveBeenCalledOnce());
     await userEvent.click(screen.getByRole('button', { name: 'Back' }));
-    await screen.findByRole('button', { name: '+ Create Role Assignment' });
-    await userEvent.click(screen.getByRole('button', { name: 'Expand All' }));
+    await screen.findByRole('button', { name: 'Create Role Assignment' });
+    await userEvent.click(screen.getByRole('button', { name: /access for/ }));
     await userEvent.click(screen.getByRole('checkbox', { name: 'study: SELECT' }));
     await userEvent.click(screen.getByRole('button', { name: 'Save Draft' }));
     await waitFor(() => expect(saveApprovers).toHaveBeenCalledTimes(2));
@@ -287,8 +289,7 @@ describe('wizard permissions integration', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Back' }));
     await userEvent.click(screen.getByRole('button', { name: 'Remove test object' }));
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
-    await screen.findByRole('button', { name: '+ Create Role Assignment' });
-    await userEvent.click(screen.getByRole('button', { name: 'Expand All' }));
+    await screen.findByRole('button', { name: 'Create Role Assignment' });
     expect(screen.queryByText('study')).toBeNull();
     expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'odx: USE CATALOG' }).checked).toBe(true);
     await userEvent.click(screen.getByRole('button', { name: 'Save Draft' }));
@@ -308,7 +309,7 @@ describe('wizard permissions integration', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
     await userEvent.click(screen.getByRole('button', { name: 'Select test objects' }));
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
-    await screen.findByRole('button', { name: '+ Create Role Assignment' });
+    await screen.findByRole('button', { name: 'Create Role Assignment' });
     await addRole();
     expect(screen.getByLabelText<HTMLInputElement>('Role Name *').value).toBe('dbx-dev-gpd-user-odx');
     await userEvent.click(screen.getByRole('checkbox', { name: 'study: SELECT' }));
@@ -346,14 +347,12 @@ describe('wizard permissions integration', () => {
     expect(await screen.findByText(/Draft saved through the permissions and approver services/)).toBeTruthy();
 
     await userEvent.click(screen.getByRole('checkbox', { name: 'Jisun.Yoon@Pfizer.com' }));
-    await userEvent.type(screen.getByRole('combobox'), 'Grace');
-    await screen.findByRole('option', {}, { timeout: 2000 });
-    await userEvent.keyboard('{Enter}');
+    await userEvent.click(screen.getByRole('checkbox', { name: /Alex Morgan/ }));
     await screen.findByText('1 of 1 roles complete');
     await waitFor(() => expect(next().disabled).toBe(false));
 
     await userEvent.click(screen.getByRole('button', { name: 'Back' }));
-    await screen.findByRole('button', { name: '+ Create Role Assignment' });
+    await screen.findByRole('button', { name: 'Create Role Assignment' });
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect(await screen.findByText('1 of 1 roles complete')).toBeTruthy();
     expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'Jisun.Yoon@Pfizer.com' }).checked).toBe(true);
@@ -363,7 +362,7 @@ describe('wizard permissions integration', () => {
     const [, saved] = saveApprovers.mock.calls[1];
     const roleId = Object.keys(saved)[0];
     expect(saved[roleId].technical.map((user) => user.email)).toEqual(['Jisun.Yoon@Pfizer.com']);
-    expect((savePermissions.mock.calls[1][0] as BlueprintFormData).approvers.approvers[roleId].business[0].displayName).toBe('Grace Okafor');
+    expect((savePermissions.mock.calls[1][0] as BlueprintFormData).approvers.approvers[roleId].business[0].displayName).toBe('Alex Morgan');
 
     await waitFor(() => expect(next().disabled).toBe(false));
     await userEvent.click(next());

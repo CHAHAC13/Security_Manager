@@ -72,18 +72,18 @@ describe('Objects to Permissions discovery integration', () => {
     expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'cts_004' }).checked).toBe(true);
     expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'information_schema' }).checked).toBe(true);
     await user.click(screen.getByRole('button', { name: 'Next' }));
-    await user.click(await screen.findByRole('button', { name: 'Expand All' }));
-    const catalog = screen.getByRole('region', { name: 'Role assignment: workspace-readers' });
+    const catalog = await screen.findByRole('rowgroup', { name: 'Role assignment: workspace-readers' });
+    await user.click(within(catalog).getByRole('button', { name: /access for/ }));
     expect(within(catalog).getByRole<HTMLInputElement>('checkbox', { name: 'cts_004: USE_SCHEMA' }).checked).toBe(true);
     expect(within(catalog).getByRole<HTMLInputElement>('checkbox', { name: 'information_schema: USE_SCHEMA' }).checked).toBe(true);
-    expect(screen.getAllByRole('region', { name: /^Role assignment:/ })).toHaveLength(1);
+    expect(screen.getAllByRole('rowgroup', { name: /^Role assignment:/ })).toHaveLength(1);
     expect(apiClient.post).toHaveBeenLastCalledWith('/api/v1/discovery/privileges', {
       securables: [
         { securable_type: 'CATALOG', full_name: 'two_schema_catalog' },
         { securable_type: 'SCHEMA', full_name: 'two_schema_catalog.cts_004' },
         { securable_type: 'SCHEMA', full_name: 'two_schema_catalog.information_schema' },
       ], include_inherited: true,
-    });
+    }, { timeout: 60_000 });
     await user.click(screen.getByRole('button', { name: 'Next' }));
     expect(await screen.findByRole('heading', { name: 'Assign Approvers' })).toBeTruthy();
   }, 15_000);
@@ -105,8 +105,8 @@ describe('Objects to Permissions discovery integration', () => {
     expect((await screen.findByRole<HTMLInputElement>('checkbox', { name: /patients/ })).checked).toBe(true);
     await user.click(screen.getAllByRole('button', { name: 'Next' })[1]);
 
-    await user.click(await screen.findByRole('button', { name: 'Expand All' }));
-    const catalog = screen.getByRole('region', { name: 'Role assignment: workspace-readers' });
+    const catalog = await screen.findByRole('rowgroup', { name: 'Role assignment: workspace-readers' });
+    await user.click(within(catalog).getByRole('button', { name: /access for/ }));
     expect(within(catalog).getByRole('checkbox', { name: 'clinical: USE_SCHEMA' })).toBeTruthy();
     expect(within(catalog).getByRole('checkbox', { name: 'outbound: USE_SCHEMA' })).toBeTruthy();
     expect(within(catalog).getByRole('checkbox', { name: 'patients: SELECT' })).toBeTruthy();
@@ -121,8 +121,8 @@ describe('Objects to Permissions discovery integration', () => {
     await user.click(await screen.findByRole('button', { name: 'outbound' }));
     expect((await screen.findByRole<HTMLInputElement>('checkbox', { name: /deliveries/ })).checked).toBe(true);
     await user.click(screen.getAllByRole('button', { name: 'Next' })[1]);
-    await user.click(await screen.findByRole('button', { name: 'Expand All' }));
-    const returned = screen.getByRole('region', { name: 'Role assignment: workspace-readers' });
+    const returned = await screen.findByRole('rowgroup', { name: 'Role assignment: workspace-readers' });
+    await user.click(within(returned).getByRole('button', { name: /access for/ }));
     expect(within(returned).getByRole<HTMLInputElement>('checkbox', { name: 'deliveries: SELECT' }).checked).toBe(true);
     expect(within(returned).getByRole<HTMLInputElement>('checkbox', { name: 'patients: SELECT' }).checked).toBe(false);
   }, 15_000);
@@ -142,9 +142,9 @@ describe('Objects to Permissions discovery integration', () => {
     await user.click(screen.getByRole('button', { name: 'Next' }));
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringContaining('No permission to inspect this catalog.'));
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(true);
-    expect(screen.queryByRole('region', { name: /^Role assignment:/ })).toBeNull();
+    expect(screen.queryByRole('rowgroup', { name: /^Role assignment:/ })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Retry' }));
-    expect(await screen.findByRole('button', { name: 'Role assignment: workspace-readers' })).toBeTruthy();
+    expect(await screen.findByRole('rowgroup', { name: 'Role assignment: workspace-readers' })).toBeTruthy();
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next' }).disabled).toBe(false);
   });
 });

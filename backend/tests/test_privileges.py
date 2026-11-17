@@ -344,6 +344,16 @@ class TestPrivilegesEndpoint:
         assert resp.status_code == 200
         assert mock_assignments.await_count == 1
 
+    def test_repeat_requests_reuse_cached_assignments(
+        self, client: TestClient, mock_assignments: AsyncMock
+    ) -> None:
+        first = client.post(PRIVILEGES_URL, json=_body(("TABLE", TABLE)))
+        second = client.post(PRIVILEGES_URL, json=_body(("TABLE", TABLE)))
+        assert second.json() == first.json()
+        assert mock_assignments.await_count == 1
+        client.post(PRIVILEGES_URL, json=_body(("TABLE", TABLE), include_inherited=False))
+        assert mock_assignments.await_count == 2
+
     @pytest.mark.parametrize(
         "payload",
         [

@@ -58,25 +58,25 @@ describe('proposed resources', () => {
       expect(objectDiscoveryService.getObjects).not.toHaveBeenCalled();
     }
     await user.click(screen.getByRole('button', { name: 'Next' }));
-    const role = await screen.findByRole('region', { name: 'Role assignment: Untitled role' });
+    const role = await screen.findByRole('rowgroup', { name: 'Role assignment: Untitled role' });
     expect(within(role).getByLabelText<HTMLInputElement>('Role Name *').value).toBe('');
     expect(within(role).getByLabelText<HTMLSelectElement>('Role Type *').value).toBe('');
     expect(within(role).getAllByText('new_catalog').length).toBeGreaterThan(0);
     if (children) {
+      await user.click(within(role).getByRole('button', { name: /access for/ }));
       expect(within(role).getAllByText('new_schema').length).toBeGreaterThan(0);
       expect(within(role).getAllByText('new_table').length).toBeGreaterThan(0);
     }
     await user.click(screen.getByRole('button', { name: 'Back' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
-    await screen.findByRole('button', { name: '+ Create Role Assignment' });
-    expect(screen.getAllByRole('region', { name: /^Role assignment:/ })).toHaveLength(1);
+    await screen.findByRole('button', { name: 'Create Role Assignment' });
+    expect(screen.getAllByRole('rowgroup', { name: /^Role assignment:/ })).toHaveLength(1);
     if (!children) {
-      await user.click(screen.getByRole('button', { name: 'Role assignment: Untitled role' }));
       await user.click(screen.getByRole('button', { name: 'Remove' }));
       await user.click(screen.getByRole('button', { name: 'Back' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));
-      await screen.findByRole('button', { name: '+ Create Role Assignment' });
-      expect(screen.queryByRole('region', { name: /^Role assignment:/ })).toBeNull();
+      await screen.findByRole('button', { name: 'Create Role Assignment' });
+      expect(screen.queryByRole('rowgroup', { name: /^Role assignment:/ })).toBeNull();
     }
   }, 20_000);
 

@@ -15,7 +15,10 @@ export interface RoleNameValidation {
 export interface PermissionsService {
   getSelectedObjects(data: BlueprintObjectsData): Promise<PermissionObject[]>;
   getPermissionMetadata(): Promise<PermissionMetadata>;
-  getExistingRolesForObjects(objects: PermissionObject[], environment: PermissionEnvironment): Promise<RoleAssignment[]>;
+  /** `onProgress` may receive partial results while later batches are still loading. */
+  getExistingRolesForObjects(
+    objects: PermissionObject[], environment: PermissionEnvironment, onProgress?: (roles: RoleAssignment[]) => void,
+  ): Promise<RoleAssignment[]>;
   searchExistingRoles(query: string, objects: PermissionObject[], environment: PermissionEnvironment): Promise<RoleAssignment[]>;
   validateRoleName(name: string, environment: PermissionEnvironment): Promise<RoleNameValidation>;
   savePermissionsDraft(payload: BlueprintFormData): Promise<void>;
@@ -208,30 +211,64 @@ function mapAssignments(
   }
 }
 
-async function loadExistingRoles(objects: PermissionObject[], environment: PermissionEnvironment): Promise<RoleAssignment[]> {
+// Small batches keep each request short; a few run in parallel.
+const PRIVILEGES_BATCH_SIZE = 25;
+const PRIVILEGES_CONCURRENCY = 4;
+const PRIVILEGES_TIMEOUT_MS = 60_000;
+
+const sortedRoles = (roles: Map<string, RoleAssignment>) =>
+  [...roles.values()].sort((a, b) => a.roleName.localeCompare(b.roleName));
+
+async function loadExistingRoles(
+  objects: PermissionObject[], environment: PermissionEnvironment, onProgress?: (roles: RoleAssignment[]) => void,
+): Promise<RoleAssignment[]> {
   const selections = objects.filter((object) => object.status === 'EXISTING')
     .map((object) => selectedSecurable(object, objects));
   const roles = new Map<string, RoleAssignment>();
+  const batches: (typeof selections)[] = [];
+  for (let offset = 0; offset < selections.length; offset += PRIVILEGES_BATCH_SIZE) {
+    batches.push(selections.slice(offset, offset + PRIVILEGES_BATCH_SIZE));
+  }
+  const responses: unknown[] = new Array(batches.length);
+  const received: boolean[] = new Array(batches.length).fill(false);
+  let mapped = 0;
   try {
-    // The backend accepts at most 100 securables per request.
-    for (let offset = 0; offset < selections.length; offset += 100) {
-      const batch = selections.slice(offset, offset + 100);
-      const { data } = await apiClient.post<unknown>('/api/v1/discovery/privileges', {
-        securables: batch.map((item) => item.selection),
-        include_inherited: true,
-      });
-      mapAssignments(data, batch, roles, objects, environment);
-    }
+    let next = 0;
+    const worker = async () => {
+      while (next < batches.length) {
+        const index = next++;
+        const { data } = await apiClient.post<unknown>('/api/v1/discovery/privileges', {
+          securables: batches[index].map((item) => item.selection),
+          include_inherited: true,
+        }, { timeout: PRIVILEGES_TIMEOUT_MS });
+        responses[index] = data;
+        received[index] = true;
+        // Map in batch order so partial and final results are deterministic regardless of completion order.
+        const before = mapped;
+        while (mapped < batches.length && received[mapped]) {
+          mapAssignments(responses[mapped], batches[mapped], roles, objects, environment);
+          mapped += 1;
+        }
+        if (onProgress && mapped > before && mapped < batches.length) {
+          // Shallow copies: later batches replace objectPermissions instead of mutating them.
+          onProgress(sortedRoles(roles).map((role) => ({ ...role })));
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(PRIVILEGES_CONCURRENCY, batches.length) }, worker));
   } catch (error) {
     if (axios.isAxiosError<{ detail?: string | { message?: string } }>(error)) {
       const detail = error.response?.data?.detail;
       if (typeof detail === 'string') throw new Error(detail, { cause: error });
       if (detail && typeof detail.message === 'string') throw new Error(detail.message, { cause: error });
       if (error.response?.status) throw new Error(`Permissions request failed (${error.response.status}).`, { cause: error });
+      if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+        throw new Error('Loading existing role groups timed out. Please try again.', { cause: error });
+      }
     }
     throw error;
   }
-  return [...roles.values()].sort((a, b) => a.roleName.localeCompare(b.roleName));
+  return sortedRoles(roles);
 }
 
 export const apiPermissionsService: PermissionsService = {
