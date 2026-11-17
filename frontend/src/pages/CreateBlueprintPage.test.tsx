@@ -79,7 +79,8 @@ describe('wizard permissions integration', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
     await screen.findByRole('heading', { name: 'Review & Submit Blueprint' });
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Submit for Approval' }).disabled).toBe(true);
-    expect(screen.getByText(/Submitting approver assignments is unavailable/)).toBeTruthy();
+    expect(screen.queryByText(/Submitting approver assignments is unavailable/)).toBeNull();
+    expect(screen.getByRole('group', { name: /Submission is unavailable until the backend supports approver assignments/ })).toBeTruthy();
   }, 15000);
 
   it('validates Deployment, preserves draft state, supports review edits, and confirms submission', async () => {
@@ -141,7 +142,7 @@ describe('wizard permissions integration', () => {
     });
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect(await screen.findByRole('heading', { name: 'Review & Submit Blueprint' })).toBeTruthy();
-    expect(screen.getByText('Blueprint is ready for submission.')).toBeTruthy();
+    expect(screen.getByText('Blueprint configuration is valid.')).toBeTruthy();
     const summary = screen.getByRole('region', { name: 'Deployment Strategy' });
     expect(within(summary).getAllByText('Immediate')).toHaveLength(1);
     expect(within(summary).getAllByText('Scheduled')).toHaveLength(2);
@@ -149,8 +150,7 @@ describe('wizard permissions integration', () => {
     expect(within(summary).getByText(/Notify Requestor on Deployment Success\/Failure:/)).toBeTruthy();
     expect(within(summary).getByText(/Notify Approvers on Deployment Success\/Failure:/)).toBeTruthy();
     expect(screen.queryByText('existing-group')).toBeNull();
-    expect(screen.getByText('Roles: 0')).toBeTruthy();
-    expect(screen.getByText('Permission Assignments: 0')).toBeTruthy();
+    expect(within(screen.getByRole('table', { name: 'Role and permission summary' })).getByRole('row', { name: '1 0 0 0' })).toBeTruthy();
     expect(screen.getByText('No new or changed roles require approvers.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Edit Blueprint Details' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Edit Object Scope' })).toBeTruthy();

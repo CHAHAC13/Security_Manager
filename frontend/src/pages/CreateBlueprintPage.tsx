@@ -305,10 +305,6 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
 
       {draftFeedback?.error && <p role="alert" className="text-sm text-rose-700">{draftFeedback.message}</p>}
       {draftFeedback && !draftFeedback.error && <Toast message={draftFeedback.message} onDismiss={dismissDraftFeedback} />}
-      {currentStep === 6 && !approverService.canSaveDraft && (
-        <p role="status" className="text-sm text-amber-700">Submitting approver assignments is unavailable until the backend supports them.</p>
-      )}
-
       {/* Stepper progress bar */}
       <BlueprintStepper currentStep={currentStep} />
 
@@ -327,6 +323,8 @@ export function CreateBlueprintPage({ service = permissionsService, approverServ
             approvers: approversData, deployment: deploymentData,
           }).length > 0))}
         nextLabel={currentStep === 4 ? 'Next: Deployment' : currentStep === 6 ? 'Submit for Approval' : undefined}
+        nextDisabledReason={currentStep === 6 && !approverService.canSaveDraft
+          ? 'Submission is unavailable until the backend supports approver assignments.' : undefined}
         saveDisabled={currentStep === 3 && !permissionsReady}
       />
     </div>

@@ -56,6 +56,15 @@ describe('BlueprintReview', () => {
       />,
     );
 
+    const scopeSummary = screen.getByRole('table', { name: 'Object scope summary' });
+    expect(within(scopeSummary).getByRole('row', { name: '3 3 3' })).toBeTruthy();
+    const scopeDetails = screen.getByText('View object scope').closest('details');
+    expect(scopeDetails?.open).toBe(false);
+    fireEvent.click(screen.getByText('View object scope'));
+    expect(scopeDetails?.open).toBe(true);
+    fireEvent.click(screen.getByText('odx'));
+    fireEvent.click(screen.getByText('new_catalog'));
+    fireEvent.click(screen.getByText('analytics'));
     expect(screen.getByText('odx')).toBeTruthy();
     expect(screen.getByText('new_catalog')).toBeTruthy();
     expect(screen.getByText('analytics')).toBeTruthy();
@@ -113,14 +122,18 @@ describe('BlueprintReview', () => {
 
     const rolesSection = screen.getByRole('region', { name: 'Roles & Permissions' });
     const approversSection = screen.getByRole('region', { name: 'Approvers' });
+    expect(within(rolesSection).getByRole('row', { name: '2 1 1 0' })).toBeTruthy();
+    expect(within(rolesSection).getByText('View roles and permissions').closest('details')?.open).toBe(false);
+    fireEvent.click(within(rolesSection).getByText('View roles and permissions'));
+    fireEvent.click(within(rolesSection).getAllByText('changed-role')[0]);
+    fireEvent.click(within(approversSection).getByText('View approvers'));
+    fireEvent.click(within(approversSection).getByText('changed-role'));
     const changedDetails = within(rolesSection).getAllByText('changed-role')[0].closest('details');
     expect(changedDetails?.open).toBe(true);
     expect(within(changedDetails!).getByText('Grant').parentElement?.textContent).toContain('Grant MODIFY — odx > cdm > study');
     expect(within(changedDetails!).getByText('Revoke').parentElement?.textContent).toContain('Revoke SELECT — odx > cdm > study');
     expect(within(changedDetails!).getByText('odx > cdm > study')).toBeTruthy();
     expect(within(rolesSection).queryByText('unchanged-role')).toBeNull();
-    expect(within(rolesSection).getByText('Roles: 1')).toBeTruthy();
-    expect(within(rolesSection).getByText('Permission Assignments: 1')).toBeTruthy();
     expect(within(approversSection).getByText('changed-role')).toBeTruthy();
     expect(within(approversSection).getByText('Changed Technical')).toBeTruthy();
     expect(within(approversSection).getByText('Changed Business')).toBeTruthy();
@@ -130,7 +143,7 @@ describe('BlueprintReview', () => {
     rerender(renderReview({ ...data, permissions: { ...data.permissions, roleAssignments: [unchanged, {
       ...role, objectPermissions: [{ ...role.objectPermissions[0], permissions: ['SELECT'] }],
     }] } }));
-    expect(within(rolesSection).getByText('Roles: 0')).toBeTruthy();
+    expect(within(rolesSection).getByRole('row', { name: '2 0 0 0' })).toBeTruthy();
     expect(within(rolesSection).getByText('No new or changed roles require approval.')).toBeTruthy();
     expect(within(approversSection).getByText('No new or changed roles require approvers.')).toBeTruthy();
     expect(within(approversSection).queryByText('changed-role')).toBeNull();
@@ -154,8 +167,7 @@ describe('BlueprintReview', () => {
       onEdit={vi.fn()} onCancelSubmit={vi.fn()} onSubmit={vi.fn()} />);
     const rolesSection = screen.getByRole('region', { name: 'Roles & Permissions' });
     const approversSection = screen.getByRole('region', { name: 'Approvers' });
-    expect(within(rolesSection).getByText('Roles: 2')).toBeTruthy();
-    expect(within(rolesSection).getByText('Request Manager Enabled Roles: 1')).toBeTruthy();
+    expect(within(rolesSection).getByRole('row', { name: '2 2 0 1' })).toBeTruthy();
     expect(within(rolesSection).getAllByText('new-role').length).toBeGreaterThan(0);
     expect(within(rolesSection).getAllByText('request-manager-role').length).toBeGreaterThan(0);
     expect(within(approversSection).getByText('new-role')).toBeTruthy();
