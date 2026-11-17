@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, Pencil, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Pencil, ShieldCheck } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { MOCK_PERMISSION_METADATA } from '@/data/permissionsData';
@@ -128,13 +128,25 @@ function Section({
   children: ReactNode;
 }) {
   return (
-    <section aria-labelledby={`review-${step}-heading`} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+    <section aria-labelledby={`review-${step}-heading`} className="rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-2">
         <h2 id={`review-${step}-heading`} className="text-sm font-semibold text-slate-900">{title}</h2>
         <EditAction step={step} title={title} onEdit={onEdit} />
       </div>
-      {children}
+      <div className="px-4 py-3">{children}</div>
     </section>
+  );
+}
+
+function Details({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <details className="group mt-3 border-t border-slate-100 pt-3">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm font-medium text-sky-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500">
+        <ChevronDown aria-hidden="true" className="h-4 w-4 transition-transform group-open:rotate-180" />
+        {label}
+      </summary>
+      <div className="mt-3">{children}</div>
+    </details>
   );
 }
 
@@ -149,7 +161,7 @@ function ScopeTree({ catalogs }: { catalogs: ScopeCatalog[] }) {
     <ul className="space-y-3">
       {catalogs.map((catalog) => (
         <li key={catalog.id} className="rounded-lg border border-slate-200 p-3">
-          <details open={catalogs.length === 1}>
+          <details>
           <summary className="flex cursor-pointer flex-wrap items-center gap-2 text-sm font-semibold text-slate-900">
             <ChevronDown aria-hidden="true" className="h-4 w-4 text-slate-500" />
             <span className="break-all font-mono">{catalog.name}</span><SourceBadge source={catalog.source} />
@@ -233,13 +245,13 @@ function RoleSummaries({ roles, scope }: { roles: RoleAssignment[]; scope: Scope
   if (!roles.length) return <p className="text-sm text-slate-500">No new or changed roles require approval.</p>;
   return (
     <div className="space-y-3">
-      {roles.map((role, index) => {
+      {roles.map((role) => {
         const formType = MOCK_PERMISSION_METADATA.formTypes.find((form) => form.code === role.requestManager.formType)?.label
           ?? formatCode(role.requestManager.formType);
         const changes = permissionChanges(role);
         const requestChanges = requestManagerChanges(role);
         return (
-          <details key={role.id} open={index === 0} className="overflow-hidden rounded-lg border border-slate-200">
+          <details key={role.id} className="overflow-hidden rounded-lg border border-slate-200">
             <summary className="flex cursor-pointer list-none flex-wrap items-center gap-3 bg-slate-50 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-500">
               <ChevronDown aria-hidden="true" className="h-4 w-4 text-slate-500" />
               <span className="break-all font-mono text-sm font-semibold text-slate-900">{role.roleName || 'Untitled role'}</span>
@@ -308,13 +320,9 @@ export function BlueprintReview({
   const permissionAssignments = approvalRoles.reduce((count, role) =>
     count + role.objectPermissions.filter((permission) => permission.permissions.length > 0).length, 0);
   const requestManagerRoles = approvalRoles.filter((role) => role.requestManager.enabled).length;
-  const checks: { step: BlueprintStep; label: string }[] = [
-    { step: 1, label: 'Blueprint details complete' },
-    { step: 2, label: 'Object scope configured' },
-    { step: 3, label: 'Roles and permissions configured' },
-    { step: 4, label: 'Required approvers assigned' },
-    { step: 5, label: 'Deployment strategy configured' },
-  ];
+  const schemaCount = scope.reduce((count, catalog) => count + catalog.schemas.length, 0);
+  const objectCount = scope.reduce((count, catalog) =>
+    count + catalog.schemas.reduce((total, schema) => total + schema.objects.length, 0), 0);
 
   useEffect(() => {
     if (confirmingSubmission) dialog.current?.showModal();
@@ -322,38 +330,51 @@ export function BlueprintReview({
   }, [confirmingSubmission]);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-3">
       <Section title="Blueprint Details" step={1} onEdit={onEdit}>
-        <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-          {([
-            ['Blueprint Name', data.setup.name],
-            ['Version', data.setup.version],
-            ['Description', data.setup.description],
-            ['Business Justification', data.setup.businessJustification],
-          ] as const).map(([label, value]) => (
-            <div key={label} className="min-w-0">
-              <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
-              <dd className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-900">{value || 'Not provided'}</dd>
-            </div>
-          ))}
+        <dl className="grid gap-3 text-sm sm:grid-cols-2">
+          <div><dt className="text-xs text-slate-500">Blueprint Name</dt><dd className="mt-1 break-words font-medium text-slate-900">{data.setup.name || 'Not provided'}</dd></div>
+          <div><dt className="text-xs text-slate-500">Version</dt><dd className="mt-1 text-slate-900">{data.setup.version || 'Not provided'}</dd></div>
         </dl>
+        <Details label="View blueprint details">
+          <dl className="grid gap-3 text-sm sm:grid-cols-2">
+            {([['Description', data.setup.description], ['Business Justification', data.setup.businessJustification]] as const).map(([label, value]) => (
+              <div key={label}><dt className="text-xs text-slate-500">{label}</dt><dd className="mt-1 whitespace-pre-wrap break-words text-slate-900">{value || 'Not provided'}</dd></div>
+            ))}
+          </dl>
+        </Details>
       </Section>
 
       <Section title="Object Scope" step={2} onEdit={onEdit}>
-        <ScopeTree catalogs={scope} />
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <caption className="sr-only">Object scope summary</caption>
+            <thead className="text-xs text-slate-500"><tr><th scope="col" className="pb-1 font-medium">Catalogs</th><th scope="col" className="pb-1 font-medium">Schemas</th><th scope="col" className="pb-1 font-medium">Objects</th></tr></thead>
+            <tbody><tr className="font-semibold text-slate-900"><td>{scope.length}</td><td>{schemaCount}</td><td>{objectCount}</td></tr></tbody>
+          </table>
+        </div>
+        <Details label="View object scope"><ScopeTree catalogs={scope} /></Details>
       </Section>
 
       <Section title="Roles & Permissions" step={3} onEdit={onEdit}>
-        <p className="mb-3 text-sm text-slate-500">Showing new roles and roles with permission or Request Manager changes.</p>
-        <div className="mb-4 flex flex-wrap gap-2" aria-label="Role and permission summary">
-          <Badge variant="blue">Roles: {approvalRoles.length}</Badge>
-          <Badge variant="blue">Permission Assignments: {permissionAssignments}</Badge>
-          <Badge variant="blue">Request Manager Enabled Roles: {requestManagerRoles}</Badge>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <caption className="sr-only">Role and permission summary</caption>
+            <thead className="text-xs text-slate-500"><tr><th scope="col" className="pb-1 pr-3 font-medium">Role groups configured</th><th scope="col" className="pb-1 pr-3 font-medium">New or changed roles</th><th scope="col" className="pb-1 pr-3 font-medium">Permission assignments</th><th scope="col" className="pb-1 font-medium">Request Manager enabled</th></tr></thead>
+            <tbody><tr className="font-semibold text-slate-900"><td>{data.permissions.roleAssignments.length}</td><td>{approvalRoles.length}</td><td>{permissionAssignments}</td><td>{requestManagerRoles}</td></tr></tbody>
+          </table>
         </div>
-        <RoleSummaries roles={approvalRoles} scope={scope} />
+        <p className="mt-2 text-xs text-slate-500">Permission and Request Manager counts apply to new or changed roles.</p>
+        <Details label="View roles and permissions">
+          <p className="mb-3 text-sm text-slate-500">Showing new roles and roles with permission or Request Manager changes.</p>
+          <RoleSummaries roles={approvalRoles} scope={scope} />
+        </Details>
       </Section>
 
+      <div className="grid items-start gap-3 lg:grid-cols-2">
       <Section title="Approvers" step={4} onEdit={onEdit}>
+        <p className="text-sm text-slate-700">Approvers for {approvalRoles.length} new or changed {approvalRoles.length === 1 ? 'role' : 'roles'}</p>
+        <Details label="View approvers">
         {!approvalRoles.length
           ? <p className="text-sm text-slate-500">No new or changed roles require approvers.</p>
           : <ul className="space-y-3">
@@ -361,7 +382,7 @@ export function BlueprintReview({
               const roleApprovers = data.approvers.approvers[role.id];
               return (
                 <li key={role.id} className="rounded-lg border border-slate-200 p-3">
-                  <details open={approvalRoles.length === 1}>
+                  <details>
                   <summary className="cursor-pointer break-all font-mono text-sm font-semibold text-slate-900">{role.roleName || 'Untitled role'}</summary>
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     {(['technical', 'business'] as const).map((type) => (
@@ -378,44 +399,46 @@ export function BlueprintReview({
               );
             })}
           </ul>}
+        </Details>
       </Section>
 
       <Section title="Deployment Strategy" step={5} onEdit={onEdit}>
-        <div className="space-y-3">
+        <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <caption className="sr-only">Deployment summary</caption>
+          <thead className="text-xs text-slate-500"><tr><th scope="col" className="pb-1 pr-3 font-medium">Environment</th><th scope="col" className="pb-1 pr-3 font-medium">Strategy</th><th scope="col" className="pb-1 font-medium">Date / Time</th></tr></thead>
+          <tbody>
           {DEPLOYMENT_ENVIRONMENTS.map(({ key, label }) => {
             const config = data.deployment.environments[key];
             const strategy = config.strategy === 'immediate' ? 'Immediate'
               : config.strategy === 'scheduled' ? 'Scheduled' : 'Not configured';
             return (
-              <div key={key} className="grid gap-1 rounded-lg border border-slate-100 p-3 sm:grid-cols-[120px_1fr]">
-                <h3 className="text-sm font-semibold text-slate-900">{label}</h3>
-                <dl className="grid gap-2 text-sm sm:grid-cols-2">
-                  <div><dt className="text-xs text-slate-500">Strategy</dt><dd className="mt-1 text-slate-800">{strategy}</dd></div>
-                  <div><dt className="text-xs text-slate-500">Date / Time</dt><dd className="mt-1 text-slate-800">{config.strategy === 'scheduled' ? formatScheduledDateTime(config.scheduledAt, config.scheduledDateTime, data.deployment.timeZone) : '—'}</dd></div>
-                </dl>
-              </div>
+              <tr key={key} className="border-t border-slate-100 text-slate-800">
+                <th scope="row" className="py-2 pr-3 font-medium">{label}</th>
+                <td className="py-2 pr-3">{strategy}</td>
+                <td className="py-2">{config.strategy === 'scheduled' ? formatScheduledDateTime(config.scheduledAt, config.scheduledDateTime, data.deployment.timeZone) : '—'}</td>
+              </tr>
             );
           })}
+          </tbody>
+        </table>
         </div>
-        <div className="mt-4 border-t border-slate-100 pt-4">
-          <h3 className="mb-2 text-sm font-semibold text-slate-900">Notification Settings</h3>
+        <Details label="View notification settings">
           <ul className="space-y-1 text-sm text-slate-700">
             <li>Notify Requestor on Deployment Success/Failure: <strong>{data.deployment.notifyRequestor ? 'Enabled' : 'Disabled'}</strong></li>
             <li>Notify Approvers on Deployment Success/Failure: <strong>{data.deployment.notifyApprovers ? 'Enabled' : 'Disabled'}</strong></li>
           </ul>
-        </div>
+        </Details>
       </Section>
+      </div>
 
-      <section aria-labelledby="review-validation-heading" className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+      <section aria-labelledby="review-validation-heading" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <h2 id="review-validation-heading" className="flex items-center gap-2 text-sm font-semibold text-slate-900">
           <ShieldCheck className="h-4 w-4 text-sky-600" aria-hidden="true" />Validation Summary
         </h2>
         {issues.length === 0 ? (
-          <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
-            <p className="font-semibold">Blueprint is ready for submission.</p>
-            <ul className="mt-2 grid gap-2 sm:grid-cols-2">
-              {checks.map((check) => <li key={check.step} className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />{check.label}</li>)}
-            </ul>
+          <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            <p className="font-semibold">Blueprint configuration is valid.</p>
           </div>
         ) : (
           <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4">

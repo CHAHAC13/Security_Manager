@@ -15,6 +15,7 @@ interface BlueprintFooterProps {
   saveDisabled?: boolean;
   /** Overrides the default "Next" label. */
   nextLabel?: string;
+  nextDisabledReason?: string;
 }
 
 /**
@@ -32,6 +33,7 @@ export function BlueprintFooter({
   nextDisabled = false,
   saveDisabled = false,
   nextLabel,
+  nextDisabledReason,
 }: BlueprintFooterProps) {
   const isFirstStep = currentStep === 1;
   const isLastStep = currentStep === BLUEPRINT_STEPS.length;
@@ -57,10 +59,17 @@ export function BlueprintFooter({
         <Button variant="secondary" onClick={onSaveDraft} disabled={busy || saveDisabled}>
           {saving ? 'Saving...' : 'Save Draft'}
         </Button>
-        <Button variant="primary" onClick={onNext} disabled={busy || nextDisabled}>
-          <span>{isLastStep ? nextLabel ?? 'Submit' : nextLabel ?? 'Next'}</span>
-          {!isLastStep && <ArrowRight className="w-3.5 h-3.5 ml-1.5" />}
-        </Button>
+        <span
+          title={nextDisabledReason}
+          role={nextDisabledReason ? 'group' : undefined}
+          aria-label={nextDisabledReason}
+          tabIndex={nextDisabledReason ? 0 : undefined}
+        >
+          <Button variant="primary" onClick={onNext} disabled={busy || nextDisabled}>
+            <span>{isLastStep ? nextLabel ?? 'Submit' : nextLabel ?? 'Next'}</span>
+            {!isLastStep && <ArrowRight className="w-3.5 h-3.5 ml-1.5" />}
+          </Button>
+        </span>
       </div>
     </div>
   );
