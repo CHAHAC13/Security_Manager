@@ -20,7 +20,9 @@ if str(BACKEND_DIR) not in sys.path:
 
 from core.cache import discovery_cache  # noqa: E402
 from routers.access_matrix import router as access_matrix_router  # noqa: E402
+from routers.approvers import router as approvers_router  # noqa: E402
 from routers.blueprint_discovery import router as blueprint_discovery_router  # noqa: E402
+from services.databricks_client import close_shared_http_client  # noqa: E402
 
 DIST_DIR = ROOT_DIR / "frontend" / "dist"
 PORT = int(os.environ.get("DATABRICKS_APP_PORT", 8000))
@@ -72,6 +74,7 @@ _log_otel_diagnostics()
 async def lifespan(app: FastAPI):
     yield
     await discovery_cache.clear()
+    await close_shared_http_client()
 
 
 app = FastAPI(
@@ -84,6 +87,7 @@ app = FastAPI(
 # ── Backend API routes ──
 app.include_router(blueprint_discovery_router)
 app.include_router(access_matrix_router)
+app.include_router(approvers_router)
 
 
 @app.get("/api/health")
