@@ -5,8 +5,16 @@ from typing import Any, Literal, NoReturn
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from core.cache import discovery_cache
-from core.config import Settings, get_settings
+from core.config import Settings, get_settings, load_permission_profiles
 from schemas.blueprint_models import (
+    PROFILE_SECURABLE_TYPES,
+    PermissionProfileId,
+    PermissionProfileResponse,
+    PermissionProfilesConfig,
+    PermissionProfileSummary,
+    ProfilePrivilegeCheckbox,
+    ProfileSecurablePrivileges,
+    ProfileSecurableType,
     CatalogResponse,
     ObjectPrivilegeResponse,
     PaginatedResponse,
@@ -500,6 +508,81 @@ async def get_objects(
         search=search,
         cached=cache_hit,
     )
+
+def get_permission_profiles(
+    settings: Settings = Depends(get_settings),
+) -> PermissionProfilesConfig:
+    try:
+        return load_permission_profiles(settings.permission_profiles_file)
+    except (OSError, ValueError) as exc:
+        # ValueError covers invalid JSON and pydantic validation errors.
+        logger.error("Invalid permission profiles configuration: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "PERMISSION_PROFILES_CONFIG_ERROR",
+                "message": "Permission profiles configuration is missing or invalid.",
+            },
+        ) from exc
+
+
+@router.get(
+    "/permission-profiles",
+    response_model=list[PermissionProfileSummary],
+)
+async def list_permission_profiles(
+    config: PermissionProfilesConfig = Depends(get_permission_profiles),
+) -> list[PermissionProfileSummary]:
+    """The selectable permission options (Read Only, Read & Write)."""
+    return [
+        PermissionProfileSummary(
+            id=profile.id,
+            display_name=profile.display_name,
+            description=profile.description,
+            configured_securable_types=[
+                item for item in PROFILE_SECURABLE_TYPES
+                if item in profile.privileges_by_securable_type
+            ],
+        )
+        for profile in sorted(config.profiles, key=lambda p: p.id)
+    ]
+
+
+@router.get(
+    "/permission-profiles/{profile_id}",
+    response_model=PermissionProfileResponse,
+)
+async def get_permission_profile(
+    profile_id: PermissionProfileId,
+    securable_type: ProfileSecurableType | None = Query(default=None),
+    config: PermissionProfilesConfig = Depends(get_permission_profiles),
+) -> PermissionProfileResponse:
+    """
+    Every privilege in the selected profile, per securable type, as locked
+    (checked + disabled) checkboxes. This is the predefined permission set,
+    not the principal's current grants; use POST /privileges for those.
+    """
+    profile = config.get(profile_id)
+    types = [securable_type] if securable_type else list(PROFILE_SECURABLE_TYPES)
+    return PermissionProfileResponse(
+        id=profile.id,
+        display_name=profile.display_name,
+        description=profile.description,
+        securable_types=[
+            ProfileSecurablePrivileges(
+                securable_type=item,
+                configured=item in profile.privileges_by_securable_type,
+                privileges=[
+                    ProfilePrivilegeCheckbox(
+                        privilege=name, label=name.replace("_", " ")
+                    )
+                    for name in profile.privileges_by_securable_type.get(item, [])
+                ],
+            )
+            for item in types
+        ],
+    )
+
 
 @router.post(
     "/privileges",

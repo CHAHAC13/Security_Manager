@@ -1,0 +1,70 @@
+{
+  "_comment": "Predefined permission profiles shown in the Permissions tab. Privilege names use the Databricks Unity Catalog API format. Only securable types listed under privileges_by_securable_type are configured; all other types (VOLUME, FUNCTION) are returned as configured=false until their mappings are confirmed and added here. CATALOG lists were provided by the project owner (Data Read / Data Read & Write). SCHEMA and OBJECT lists are the CATALOG lists restricted to the privileges Unity Catalog allows on that level (SCHEMA: no BROWSE, USE_CATALOG, CREATE_SCHEMA; OBJECT = any table or view: only SELECT, MODIFY, APPLY_TAG). Note: MODIFY is grantable on tables only, not views.",
+  "profiles": [
+    {
+      "id": "READ_ONLY",
+      "display_name": "Read Only",
+      "description": "Data Read permission set.",
+      "privileges_by_securable_type": {
+        "CATALOG": [
+          "EXECUTE",
+          "BROWSE",
+          "READ_VOLUME",
+          "SELECT",
+          "USE_CATALOG",
+          "USE_SCHEMA"
+        ],
+        "SCHEMA": [
+          "EXECUTE",
+          "READ_VOLUME",
+          "SELECT",
+          "USE_SCHEMA"
+        ],
+        "OBJECT": [
+          "SELECT"
+        ]
+      }
+    },
+    {
+      "id": "READ_WRITE",
+      "display_name": "Read & Write",
+      "description": "Data Read & Write permission set.",
+      "privileges_by_securable_type": {
+        "CATALOG": [
+          "BROWSE",
+          "READ_VOLUME",
+          "SELECT",
+          "USE_CATALOG",
+          "USE_SCHEMA",
+          "APPLY_TAG",
+          "MODIFY",
+          "WRITE_VOLUME",
+          "CREATE_FUNCTION",
+          "CREATE_SCHEMA",
+          "CREATE_TABLE",
+          "CREATE_VOLUME",
+          "CREATE_MODEL",
+          "CREATE_MATERIALIZED_VIEW"
+        ],
+        "SCHEMA": [
+          "READ_VOLUME",
+          "SELECT",
+          "USE_SCHEMA",
+          "APPLY_TAG",
+          "MODIFY",
+          "WRITE_VOLUME",
+          "CREATE_FUNCTION",
+          "CREATE_TABLE",
+          "CREATE_VOLUME",
+          "CREATE_MODEL",
+          "CREATE_MATERIALIZED_VIEW"
+        ],
+        "OBJECT": [
+          "SELECT",
+          "APPLY_TAG",
+          "MODIFY"
+        ]
+      }
+    }
+  ]
+}

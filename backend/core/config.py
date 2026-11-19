@@ -1,4 +1,6 @@
+import json
 from functools import lru_cache
+from pathlib import Path
 from urllib.parse import urlparse
 
 from pydantic import Field, field_validator
@@ -45,6 +47,12 @@ class Settings(BaseSettings):
         alias="CATALOG_TAG_FILTER",
     )
 
+    # JSON file with the Read Only / Read & Write permission profiles.
+    # Empty means core/permission_profiles.json next to this module.
+    permission_profiles_file: str = Field(
+        default="", alias="PERMISSION_PROFILES_FILE"
+    )
+
     @field_validator("databricks_host")
     @classmethod
     def validate_databricks_host(cls, value: str) -> str:
@@ -78,3 +86,16 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+DEFAULT_PERMISSION_PROFILES_FILE = Path(__file__).with_name("permission_profiles.json")
+
+
+@lru_cache
+def load_permission_profiles(path: str = ""):
+    """Load and validate the permission profiles file (cached per path)."""
+    from schemas.blueprint_models import PermissionProfilesConfig
+
+    file_path = Path(path) if path else DEFAULT_PERMISSION_PROFILES_FILE
+    with file_path.open(encoding="utf-8") as handle:
+        return PermissionProfilesConfig.model_validate(json.load(handle))

@@ -9,6 +9,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -22,6 +23,7 @@ from routers.blueprint_discovery import (
     map_privilege_assignment,
     to_databricks_securable_type,
 )
+from schemas.blueprint_models import PermissionProfilesConfig
 from services.databricks_client import DatabricksApiError, DatabricksUnityCatalogClient
 
 
@@ -404,6 +406,14 @@ class TestPrivilegesEndpoint:
             "detail": {"code": "DATABRICKS_API_ERROR", "message": "Table 'c.s.t' does not exist."}
         }
 
+    def test_privileges_response_has_no_profile_fields(self, client: TestClient) -> None:
+        # Current grants and permission profiles stay in separate APIs.
+        resp = client.post(PRIVILEGES_URL, json=_body(("CATALOG", CATALOG)))
+        assert resp.status_code == 200
+        assert {key for row in resp.json() for key in row} == {
+            "securable_type", "full_name", "principal", "principal_display_name", "privileges",
+        }
+
     def test_view_and_table_rows_keep_their_own_type(self, client: TestClient) -> None:
         resp = client.post(PRIVILEGES_URL, json=_body(("VIEW", VIEW), ("TABLE", TABLE)))
         types = {i["full_name"]: i["securable_type"] for i in resp.json()}
@@ -426,6 +436,172 @@ async def _fake_sp_assignments(
         {"principal": SP_KNOWN, "privileges": [{"privilege": "USE_CATALOG"}]},
         {"principal": SP_UNKNOWN, "privileges": [{"privilege": "BROWSE"}]},
     ]
+
+
+PROFILES_URL = "/api/v1/discovery/permission-profiles"
+
+READ_ONLY_CATALOG = [
+    "EXECUTE", "BROWSE", "READ_VOLUME", "SELECT", "USE_CATALOG", "USE_SCHEMA",
+]
+READ_WRITE_CATALOG = [
+    "BROWSE", "READ_VOLUME", "SELECT", "USE_CATALOG", "USE_SCHEMA",
+    "APPLY_TAG", "MODIFY", "WRITE_VOLUME", "CREATE_FUNCTION", "CREATE_SCHEMA",
+    "CREATE_TABLE", "CREATE_VOLUME", "CREATE_MODEL", "CREATE_MATERIALIZED_VIEW",
+]
+
+
+def _profile(profile_id: str, mapping: dict[str, list[str]] | None = None) -> dict[str, Any]:
+    return {
+        "id": profile_id,
+        "display_name": profile_id.title(),
+        "privileges_by_securable_type": mapping or {},
+    }
+
+
+class TestPermissionProfiles:
+    """Uses the real core/permission_profiles.json shipped with the backend."""
+
+    def test_lists_the_two_options(self, client: TestClient) -> None:
+        resp = client.get(PROFILES_URL)
+        assert resp.status_code == 200
+        assert resp.json() == [
+            {"id": "READ_ONLY", "display_name": "Read Only",
+             "description": "Data Read permission set.",
+             "configured_securable_types": ["CATALOG", "SCHEMA", "OBJECT"]},
+            {"id": "READ_WRITE", "display_name": "Read & Write",
+             "description": "Data Read & Write permission set.",
+             "configured_securable_types": ["CATALOG", "SCHEMA", "OBJECT"]},
+        ]
+
+    @pytest.mark.parametrize(
+        ("profile_id", "expected"),
+        [("READ_ONLY", READ_ONLY_CATALOG), ("READ_WRITE", READ_WRITE_CATALOG)],
+    )
+    def test_catalog_privileges_are_locked_checkboxes(
+        self, client: TestClient, profile_id: str, expected: list[str]
+    ) -> None:
+        resp = client.get(f"{PROFILES_URL}/{profile_id}", params={"securable_type": "CATALOG"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["privileges_selectable"] is False
+        [catalog] = body["securable_types"]
+        assert catalog["securable_type"] == "CATALOG" and catalog["configured"] is True
+        assert [p["privilege"] for p in catalog["privileges"]] == expected
+        assert all(p["checked"] is True and p["disabled"] is True for p in catalog["privileges"])
+        labels = {p["privilege"]: p["label"] for p in catalog["privileges"]}
+        assert labels["READ_VOLUME"] == "READ VOLUME"
+
+    def test_unmapped_types_are_not_invented(self, client: TestClient) -> None:
+        resp = client.get(f"{PROFILES_URL}/READ_WRITE")
+        assert resp.status_code == 200
+        types = resp.json()["securable_types"]
+        assert [t["securable_type"] for t in types] == [
+            "CATALOG", "SCHEMA", "OBJECT", "VOLUME", "FUNCTION",
+        ]
+        for item in types[3:]:  # VOLUME, FUNCTION
+            assert item["configured"] is False and item["privileges"] == []
+
+    @pytest.mark.parametrize(
+        ("profile_id", "securable_type", "expected"),
+        [
+            ("READ_ONLY", "SCHEMA", ["EXECUTE", "READ_VOLUME", "SELECT", "USE_SCHEMA"]),
+            ("READ_WRITE", "SCHEMA", [
+                "READ_VOLUME", "SELECT", "USE_SCHEMA", "APPLY_TAG", "MODIFY", "WRITE_VOLUME",
+                "CREATE_FUNCTION", "CREATE_TABLE", "CREATE_VOLUME", "CREATE_MODEL",
+                "CREATE_MATERIALIZED_VIEW",
+            ]),
+            ("READ_ONLY", "OBJECT", ["SELECT"]),
+            ("READ_WRITE", "OBJECT", ["SELECT", "APPLY_TAG", "MODIFY"]),
+        ],
+    )
+    def test_schema_and_table_mappings(
+        self, client: TestClient, profile_id: str, securable_type: str, expected: list[str]
+    ) -> None:
+        resp = client.get(
+            f"{PROFILES_URL}/{profile_id}", params={"securable_type": securable_type}
+        )
+        assert resp.status_code == 200
+        [item] = resp.json()["securable_types"]
+        assert item["configured"] is True
+        assert [p["privilege"] for p in item["privileges"]] == expected
+        assert all(p["checked"] and p["disabled"] for p in item["privileges"])
+
+    @pytest.mark.parametrize("profile_id", ["READ_ONLY", "READ_WRITE"])
+    @pytest.mark.parametrize("securable_type", ["SCHEMA", "OBJECT"])
+    def test_schema_and_table_are_subsets_of_catalog(
+        self, client: TestClient, profile_id: str, securable_type: str
+    ) -> None:
+        # Derived mappings must never add privileges beyond the owner-defined CATALOG list,
+        # and must only use privileges Unity Catalog allows on that securable type.
+        allowed = {
+            "SCHEMA": set(READ_WRITE_CATALOG + READ_ONLY_CATALOG)
+            - {"BROWSE", "USE_CATALOG", "CREATE_SCHEMA"},
+            "OBJECT": {"SELECT", "MODIFY", "APPLY_TAG"},  # tables and views together
+        }[securable_type]
+        body = client.get(f"{PROFILES_URL}/{profile_id}").json()
+        by_type = {t["securable_type"]: [p["privilege"] for p in t["privileges"]]
+                   for t in body["securable_types"]}
+        derived, catalog = by_type[securable_type], by_type["CATALOG"]
+        assert set(derived) <= set(catalog) and set(derived) <= allowed
+        # Same relative order as the CATALOG list, and nothing applicable left out.
+        assert derived == [name for name in catalog if name in allowed]
+
+    def test_no_databricks_calls(self, client: TestClient, mock_assignments: AsyncMock) -> None:
+        client.get(PROFILES_URL)
+        client.get(f"{PROFILES_URL}/READ_ONLY")
+        mock_assignments.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("path", "params"),
+        [
+            ("/CUSTOM", {}),
+            ("/read_only", {}),
+            ("/READ_ONLY", {"securable_type": "METASTORE"}),
+            # Profiles are defined for objects as a whole, not per table/view.
+            ("/READ_ONLY", {"securable_type": "TABLE"}),
+            ("/READ_WRITE", {"securable_type": "VIEW"}),
+        ],
+    )
+    def test_only_predefined_options_accepted(
+        self, client: TestClient, path: str, params: dict[str, str]
+    ) -> None:
+        assert client.get(f"{PROFILES_URL}{path}", params=params).status_code == 422
+
+    def test_invalid_config_file_returns_500(self, tmp_path) -> None:
+        bad = tmp_path / "profiles.json"
+        bad.write_text(json.dumps({"profiles": [_profile("READ_ONLY")]}))
+        app = _build_test_app(_make_settings(PERMISSION_PROFILES_FILE=str(bad)))
+        resp = TestClient(app).get(PROFILES_URL)
+        assert resp.status_code == 500
+        assert resp.json()["detail"]["code"] == "PERMISSION_PROFILES_CONFIG_ERROR"
+
+    def test_custom_config_file_and_name_normalization(self, tmp_path) -> None:
+        path = tmp_path / "profiles.json"
+        path.write_text(json.dumps({"profiles": [
+            _profile("READ_ONLY", {"OBJECT": ["select"]}),
+            _profile("READ_WRITE", {"OBJECT": ["select", "modify"], "VOLUME": ["write volume"]}),
+        ]}))
+        app = _build_test_app(_make_settings(PERMISSION_PROFILES_FILE=str(path)))
+        resp = TestClient(app).get(f"{PROFILES_URL}/READ_WRITE", params={"securable_type": "VOLUME"})
+        assert resp.json()["securable_types"][0]["privileges"] == [
+            {"privilege": "WRITE_VOLUME", "label": "WRITE VOLUME", "checked": True, "disabled": True},
+        ]
+
+    @pytest.mark.parametrize(
+        "profiles",
+        [
+            [_profile("READ_ONLY")],  # READ_WRITE missing
+            [_profile("READ_ONLY"), _profile("READ_ONLY")],  # duplicate id
+            [_profile("READ_ONLY"), _profile("READ_WRITE"), _profile("ADMIN")],  # extra option
+            [_profile("READ_ONLY", {"OBJECT": ["SELECT", "select"]}), _profile("READ_WRITE")],
+            [_profile("READ_ONLY", {"TABLE": ["SELECT"]}), _profile("READ_WRITE")],  # use OBJECT
+            [_profile("READ_ONLY", {"METASTORE": ["SELECT"]}), _profile("READ_WRITE")],
+            [_profile("READ_ONLY", {"OBJECT": [" "]}), _profile("READ_WRITE")],
+        ],
+    )
+    def test_config_validation(self, profiles: list[dict[str, Any]]) -> None:
+        with pytest.raises(ValueError):
+            PermissionProfilesConfig.model_validate({"profiles": profiles})
 
 
 class TestPrincipalDisplayNames:
